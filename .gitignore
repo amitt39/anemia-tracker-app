@@ -8,11 +8,12 @@ node_modules/
 anemia-tracker/node_modules/
 anemia-tracker-api/node_modules/
 
+# Expo
+.expo/
+
 # Build outputs
 dist/
 build/
-.expo/
 
 # Logs
 npm-debug.log*
-anemia-tracker/.git/
