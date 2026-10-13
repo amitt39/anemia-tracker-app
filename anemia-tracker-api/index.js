@@ -1159,12 +1159,7 @@ app.get(
   requireParentAuth,
   async (req, res, next) => {
     // Validate student ID
-    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
-      return res.status(400).json({
-        message: "student_id must be a valid student ID",
-      });
-    }
-
+    if (!requirePositiveIntegerParam(req, res, "student_id")) return;
     try {
       // Verify verified parent-student link
       const linkResult = await pool.query(
@@ -1198,12 +1193,7 @@ app.get(
   requireParentAuth,
   async (req, res, next) => {
     // Validate student ID
-    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
-      return res.status(400).json({
-        message: "student_id must be a valid student ID",
-      });
-    }
-
+    if (!requirePositiveIntegerParam(req, res, "student_id")) return;
     try {
       // Verify verified parent-student link
       const linkResult = await pool.query(
@@ -1397,11 +1387,7 @@ app.patch(
     const { status } = req.body;
 
     // Validate link identifiers
-    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
-      return res.status(400).json({
-        message: "student_id must be a valid student ID",
-      });
-    }
+    if (!requirePositiveIntegerParam(req, res, "student_id")) return;
 
     if (!Number.isInteger(Number(req.params.parent_id)) || Number(req.params.parent_id) <= 0) {
       return res.status(400).json({
@@ -1459,11 +1445,7 @@ app.post(
     const hbLevel = Number(hb_level);
     const parsedTestDate = new Date(test_date);
 
-    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
-      return res.status(400).json({
-        message: "student_id must be a valid student ID",
-      });
-    }
+    if (!requirePositiveIntegerParam(req, res, "student_id")) return;
 
     if (
       test_date === undefined ||
@@ -1553,11 +1535,7 @@ app.get(
   requireSchoolAuth,
   async (req, res, next) => {
     // Validate student ID
-    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
-      return res.status(400).json({
-        message: "student_id must be a valid student ID",
-      });
-    }
+    if (!requirePositiveIntegerParam(req, res, "student_id")) return;
 
     try {
       // Verify student ownership
@@ -1589,11 +1567,7 @@ app.get(
 
 app.get("/hb-tests/:test_id", requireSchoolAuth, async (req, res, next) => {
   // Validate test ID
-  if (!Number.isInteger(Number(req.params.test_id)) || Number(req.params.test_id) <= 0) {
-    return res.status(400).json({
-      message: "test_id must be a valid Hb test ID",
-    });
-  }
+  if (!requirePositiveIntegerParam(req, res, "test_id")) return;
 
   try {
     // Fetch school Hb test
@@ -1635,11 +1609,7 @@ app.post(
       });
     }
 
-    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
-      return res.status(400).json({
-        message: "student_id must be a valid student ID",
-      });
-    }
+    if (!requirePositiveIntegerParam(req, res, "student_id")) return;
 
     if (!Number.isInteger(Number(test_id)) || Number(test_id) <= 0) {
       return res.status(400).json({
@@ -1767,11 +1737,7 @@ app.get(
       });
     }
 
-    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
-      return res.status(400).json({
-        message: "student_id must be a valid student ID",
-      });
-    }
+    if (!requirePositiveIntegerParam(req, res, "student_id")) return;
 
     try {
       // Verify teacher ownership
@@ -2025,11 +1991,7 @@ app.get(
   authMiddleware,
   async (req, res, next) => {
     // Validate student ID
-    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
-      return res.status(400).json({
-        message: "student_id must be a valid student ID",
-      });
-    }
+    if (!requirePositiveIntegerParam(req, res, "student_id")) return;
 
     try {
       if (req.auth_role === "parent") {
