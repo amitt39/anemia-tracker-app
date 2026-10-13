@@ -158,7 +158,7 @@ function requireTeacherAuth(req, res, next) {
 }
 
 function requireParentAuth(req, res, next) {
-  authMiddleware(req, res, () => {
+  authMiddleware(req, res, async () => {
     if (
       req.auth_role !== "parent" ||
       !Number.isInteger(Number(req.parent_id)) ||
@@ -169,7 +169,22 @@ function requireParentAuth(req, res, next) {
       });
     }
 
-    next();
+    try {
+      const result = await pool.query(
+        "SELECT status FROM parents WHERE parent_id = $1",
+        [Number(req.parent_id)]
+      );
+
+      if (result.rows.length === 0 || result.rows[0].status !== "active") {
+        return res.status(401).json({
+          message: "Parent account is inactive or unavailable",
+        });
+      }
+
+      return next();
+    } catch (error) {
+      return next(error);
+    }
   });
 }
 
