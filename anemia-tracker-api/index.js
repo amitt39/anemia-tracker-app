@@ -12,7 +12,20 @@ const PORT = process.env.PORT || 3000;
 const parentOtpStore = new Map();
 
 // Middleware
-app.use(cors());
+const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8081")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(null, false);
+  },
+}));
 app.use(express.json());
 
 function createRateLimiter({ windowMs, maxRequests }) {
