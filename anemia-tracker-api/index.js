@@ -49,6 +49,7 @@ function authMiddleware(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.school_id = decoded.school_id;
+    req.teacher_id = decoded.teacher_id;
     next();
   } catch (error) {
     return res.status(401).json({
@@ -159,6 +160,70 @@ app.post("/schools/login", async (req, res, next) => {
       message: "Login successful",
       token,
       school_id: school.school_id,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/teachers/login", async (req, res, next) => {
+  const { school_id, email, password } = req.body;
+
+  // Validate credentials
+  if (
+    !Number.isInteger(Number(school_id)) ||
+    Number(school_id) <= 0 ||
+    typeof email !== "string" ||
+    typeof password !== "string" ||
+    email.trim() === "" ||
+    password.trim() === ""
+  ) {
+    return res.status(400).json({
+      message: "school_id, email, and password are required",
+    });
+  }
+
+  try {
+    // Find teacher
+    const result = await pool.query(
+      "SELECT teacher_id, school_id, password_hash FROM teachers WHERE school_id = $1 AND email = $2",
+      [Number(school_id), email.trim()]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({
+        message: "Invalid credentials",
+      });
+    }
+
+    // Verify password
+    const teacher = result.rows[0];
+    const passwordMatches = await bcrypt.compare(
+      password,
+      teacher.password_hash
+    );
+
+    if (!passwordMatches) {
+      return res.status(401).json({
+        message: "Invalid credentials",
+      });
+    }
+
+    // Issue teacher token
+    const token = jwt.sign(
+      {
+        school_id: teacher.school_id,
+        teacher_id: teacher.teacher_id,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.status(200).json({
+      message: "Login successful",
+      token,
+      school_id: teacher.school_id,
+      teacher_id: teacher.teacher_id,
     });
   } catch (error) {
     return next(error);
@@ -900,6 +965,173 @@ app.get(
     }
   }
 );
+
+app.post(
+  "/students/:student_id/hb-tests",
+  authMiddleware,
+  async (req, res, next) => {
+    const { hb_level, test_date } = req.body;
+
+    // Validate test input
+    const hbLevel = Number(hb_level);
+    const parsedTestDate = new Date(test_date);
+
+    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
+      return res.status(400).json({
+        message: "student_id must be a valid student ID",
+      });
+    }
+
+    if (
+      test_date === undefined ||
+      Number.isNaN(parsedTestDate.getTime()) ||
+      parsedTestDate.toISOString().slice(0, 10) !== test_date
+    ) {
+      return res.status(400).json({
+        message: "test_date must be a valid date in YYYY-MM-DD format",
+      });
+    }
+
+    if (Number.isNaN(hbLevel) || hbLevel < 2.0 || hbLevel > 25.0) {
+      return res.status(400).json({
+        message: "hb_level must be between 2.0 and 25.0",
+      });
+    }
+
+    if (
+      !Number.isInteger(Number(req.teacher_id)) ||
+      Number(req.teacher_id) <= 0
+    ) {
+      return res.status(401).json({
+        message: "Authenticated teacher is required to record Hb tests",
+      });
+    }
+
+    try {
+      // Verify student ownership
+      const studentResult = await pool.query(
+        "SELECT s.student_id FROM students s INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE s.student_id = $1 AND c.school_id = $2",
+        [Number(req.params.student_id), req.school_id]
+      );
+
+      if (studentResult.rows.length === 0) {
+        return res.status(404).json({
+          message: "Student not found",
+        });
+      }
+
+      // Verify teacher ownership
+      const teacherResult = await pool.query(
+        "SELECT teacher_id FROM teachers WHERE teacher_id = $1 AND school_id = $2",
+        [Number(req.teacher_id), req.school_id]
+      );
+
+      if (teacherResult.rows.length === 0) {
+        return res.status(400).json({
+          message: "Authenticated teacher must belong to this school",
+        });
+      }
+
+      // Record Hb test
+      const result = await pool.query(
+        "INSERT INTO hb_tests (student_id, test_date, hb_level, recorded_by) VALUES ($1, $2, $3, $4) RETURNING test_id, student_id, test_date, hb_level, recorded_by, created_at",
+        [
+          Number(req.params.student_id),
+          test_date,
+          hbLevel,
+          Number(req.teacher_id),
+        ]
+      );
+
+      return res.status(201).json({
+        hb_test: result.rows[0],
+      });
+    } catch (error) {
+      // Handle database constraint errors
+      if (error.code === "23505") {
+        return res.status(409).json({
+          message: "Hb test already exists",
+        });
+      }
+
+      if (error.code === "23503" || error.code === "23514") {
+        return res.status(400).json({
+          message: "Invalid Hb test data",
+        });
+      }
+
+      return next(error);
+    }
+  }
+);
+
+app.get(
+  "/students/:student_id/hb-tests",
+  authMiddleware,
+  async (req, res, next) => {
+    // Validate student ID
+    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
+      return res.status(400).json({
+        message: "student_id must be a valid student ID",
+      });
+    }
+
+    try {
+      // Verify student ownership
+      const studentResult = await pool.query(
+        "SELECT s.student_id FROM students s INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE s.student_id = $1 AND c.school_id = $2",
+        [Number(req.params.student_id), req.school_id]
+      );
+
+      if (studentResult.rows.length === 0) {
+        return res.status(404).json({
+          message: "Student not found",
+        });
+      }
+
+      // Fetch student Hb tests
+      const result = await pool.query(
+        "SELECT test_id, student_id, test_date, hb_level, recorded_by, created_at FROM hb_tests WHERE student_id = $1 ORDER BY test_date DESC, created_at DESC",
+        [Number(req.params.student_id)]
+      );
+
+      return res.status(200).json({
+        hb_tests: result.rows,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+app.get("/hb-tests/:test_id", authMiddleware, async (req, res, next) => {
+  // Validate test ID
+  if (!Number.isInteger(Number(req.params.test_id)) || Number(req.params.test_id) <= 0) {
+    return res.status(400).json({
+      message: "test_id must be a valid Hb test ID",
+    });
+  }
+
+  try {
+    // Fetch school Hb test
+    const result = await pool.query(
+      "SELECT h.test_id, h.student_id, h.test_date, h.hb_level, h.recorded_by, h.created_at FROM hb_tests h INNER JOIN students s ON h.student_id = s.student_id INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE h.test_id = $1 AND c.school_id = $2",
+      [Number(req.params.test_id), req.school_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        message: "Hb test not found",
+      });
+    }
+
+    return res.status(200).json({
+      hb_test: result.rows[0],
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 // Handle unknown routes
 app.use((req, res) => {
