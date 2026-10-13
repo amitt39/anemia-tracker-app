@@ -884,6 +884,13 @@ function isParentOtpMatch(expectedHash, phoneNumber, otp) {
   );
 }
 
+function canReturnDevelopmentOtp() {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.ALLOW_DEV_OTP === "true"
+  );
+}
+
 app.post("/parents/login/request-otp", async (req, res, next) => {
   const { phone_number } = req.body;
 
@@ -896,8 +903,7 @@ app.post("/parents/login/request-otp", async (req, res, next) => {
 
   const phoneNumber = phone_number.trim();
 
-  // Block development OTPs in production
-  if (process.env.NODE_ENV === "production") {
+  if (!canReturnDevelopmentOtp()) {
     return res.status(503).json({
       message: "OTP delivery is not configured",
     });
@@ -916,7 +922,7 @@ app.post("/parents/login/request-otp", async (req, res, next) => {
       });
     }
 
-    // Generate development OTP
+    // Generate development OTP only when explicitly enabled outside production
     const otp = String(crypto.randomInt(100000, 1000000));
     parentOtpStore.set(phoneNumber, {
       parent_id: result.rows[0].parent_id,
