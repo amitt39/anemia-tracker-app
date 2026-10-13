@@ -1070,6 +1070,45 @@ app.get(
   }
 );
 
+app.get(
+  "/parents/me/students/:student_id/tablet-courses",
+  requireParentAuth,
+  async (req, res, next) => {
+    // Validate student ID
+    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
+      return res.status(400).json({
+        message: "student_id must be a valid student ID",
+      });
+    }
+
+    try {
+      // Verify verified parent-student link
+      const linkResult = await pool.query(
+        "SELECT student_id FROM student_parents WHERE student_id = $1 AND parent_id = $2 AND status = 'verified'",
+        [Number(req.params.student_id), Number(req.parent_id)]
+      );
+
+      if (linkResult.rows.length === 0) {
+        return res.status(404).json({
+          message: "Student not found",
+        });
+      }
+
+      // Fetch verified linked student tablet courses
+      const result = await pool.query(
+        "SELECT course_id, student_id, test_id, start_date, end_date, created_at FROM tablet_courses WHERE student_id = $1 ORDER BY start_date DESC, created_at DESC",
+        [Number(req.params.student_id)]
+      );
+
+      return res.status(200).json({
+        tablet_courses: result.rows,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
 app.post("/parents", requireSchoolAuth, async (req, res, next) => {
   const { phone_number } = req.body;
 
