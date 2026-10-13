@@ -66,7 +66,7 @@ function authMiddleware(req, res, next) {
 function requireSchoolAuth(req, res, next) {
   authMiddleware(req, res, () => {
     if (
-      req.auth_role === "parent" ||
+      req.auth_role !== "school" ||
       !Number.isInteger(Number(req.school_id)) ||
       Number(req.school_id) <= 0
     ) {
@@ -80,8 +80,11 @@ function requireSchoolAuth(req, res, next) {
 }
 
 function requireTeacherAuth(req, res, next) {
-  requireSchoolAuth(req, res, () => {
+  authMiddleware(req, res, () => {
     if (
+      req.auth_role !== "teacher" ||
+      !Number.isInteger(Number(req.school_id)) ||
+      Number(req.school_id) <= 0 ||
       !Number.isInteger(Number(req.teacher_id)) ||
       Number(req.teacher_id) <= 0
     ) {
@@ -203,7 +206,10 @@ app.post("/schools/login", async (req, res, next) => {
 
     // Issue token
     const token = jwt.sign(
-      { school_id: school.school_id },
+      {
+        school_id: school.school_id,
+        role: "school",
+      },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -266,6 +272,7 @@ app.post("/teachers/login", async (req, res, next) => {
       {
         school_id: teacher.school_id,
         teacher_id: teacher.teacher_id,
+        role: "teacher",
       },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
