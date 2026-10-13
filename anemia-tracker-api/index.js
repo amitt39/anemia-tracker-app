@@ -28,6 +28,16 @@ app.use(cors({
 }));
 app.use(express.json());
 
+function requireJsonBody(req, res, next) {
+  if (req.body === undefined || req.body === null) {
+    return res.status(400).json({
+      message: "Request body is required",
+    });
+  }
+
+  return next();
+}
+
 function requirePositiveIntegerParam(req, res, paramName) {
   const value = req.params[paramName];
 
@@ -233,7 +243,7 @@ app.get("/api/protected", requireSchoolAuth, (req, res) => {
   });
 });
 
-app.post("/schools", async (req, res, next) => {
+app.post("/schools", requireJsonBody, async (req, res, next) => {
   const { school_name, email, password } = req.body;
 
   // Validate required fields
@@ -282,7 +292,7 @@ app.post("/schools", async (req, res, next) => {
   }
 });
 
-app.post("/schools/login", schoolLoginLimiter, async (req, res, next) => {
+app.post("/schools/login", schoolLoginLimiter, requireJsonBody, async (req, res, next) => {
   const { email, password } = req.body;
 
   // Validate credentials
@@ -343,7 +353,7 @@ app.post("/schools/login", schoolLoginLimiter, async (req, res, next) => {
   }
 });
 
-app.post("/teachers/login", teacherLoginLimiter, async (req, res, next) => {
+app.post("/teachers/login", teacherLoginLimiter, requireJsonBody, async (req, res, next) => {
   const { school_id, email, password } = req.body;
 
   // Validate credentials
@@ -408,7 +418,7 @@ app.post("/teachers/login", teacherLoginLimiter, async (req, res, next) => {
   }
 });
 
-app.post("/teachers", requireSchoolAuth, async (req, res, next) => {
+app.post("/teachers", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
   const { first_name, last_name, email, password } = req.body;
 
   // Validate required fields
@@ -509,7 +519,7 @@ app.get("/teachers/:teacher_id", requireSchoolAuth, async (req, res, next) => {
   }
 });
 
-app.patch("/teachers/:teacher_id", requireSchoolAuth, async (req, res, next) => {
+app.patch("/teachers/:teacher_id", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
   if (!requirePositiveIntegerParam(req, res, "teacher_id")) return;
   const allowedFields = ["first_name", "last_name", "email"];
   const updates = [];
@@ -573,7 +583,7 @@ app.patch("/teachers/:teacher_id", requireSchoolAuth, async (req, res, next) => 
   }
 });
 
-app.post("/classrooms", requireSchoolAuth, async (req, res, next) => {
+app.post("/classrooms", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
   const { class_name, teacher_id } = req.body;
 
   // Validate required fields
@@ -674,7 +684,7 @@ app.get("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next) =
   }
 });
 
-app.patch("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next) => {
+app.patch("/classrooms/:classroom_id", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
   if (!requirePositiveIntegerParam(req, res, "classroom_id")) return;
   const updates = [];
   const values = [];
@@ -800,7 +810,7 @@ app.delete("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next
   }
 });
 
-app.post("/students", requireSchoolAuth, async (req, res, next) => {
+app.post("/students", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
   const { classroom_id, roll_number, first_name, last_name } = req.body;
 
   // Validate required fields
@@ -905,7 +915,7 @@ app.get("/students/:student_id", requireSchoolAuth, async (req, res, next) => {
   }
 });
 
-app.patch("/students/:student_id", requireSchoolAuth, async (req, res, next) => {
+app.patch("/students/:student_id", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
   if (!requirePositiveIntegerParam(req, res, "student_id")) return;
   const updates = [];
   const values = [];
@@ -1057,7 +1067,7 @@ function canReturnDevelopmentOtp() {
   );
 }
 
-app.post("/parents/login/request-otp", otpRequestLimiter, async (req, res, next) => {
+app.post("/parents/login/request-otp", otpRequestLimiter, requireJsonBody, async (req, res, next) => {
   const { phone_number } = req.body;
 
   // Validate phone number
@@ -1107,7 +1117,7 @@ app.post("/parents/login/request-otp", otpRequestLimiter, async (req, res, next)
   }
 });
 
-app.post("/parents/login/verify-otp", otpVerifyLimiter, async (req, res, next) => {
+app.post("/parents/login/verify-otp", otpVerifyLimiter, requireJsonBody, async (req, res, next) => {
   const { phone_number, otp } = req.body;
 
   // Validate OTP input
@@ -1278,7 +1288,7 @@ app.get(
   }
 );
 
-app.post("/parents", requireSchoolAuth, async (req, res, next) => {
+app.post("/parents", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
   const { phone_number } = req.body;
 
   // Validate required fields
@@ -1331,6 +1341,7 @@ app.get("/parents", requireSchoolAuth, async (req, res, next) => {
 app.post(
   "/students/:student_id/parents",
   requireSchoolAuth,
+  requireJsonBody,
   async (req, res, next) => {
     if (!requirePositiveIntegerParam(req, res, "student_id")) return;
     const { parent_id, relationship } = req.body;
@@ -1449,6 +1460,7 @@ app.get(
 app.patch(
   "/students/:student_id/parents/:parent_id",
   requireSchoolAuth,
+  requireJsonBody,
   async (req, res, next) => {
     const { status } = req.body;
 
@@ -1499,6 +1511,7 @@ app.patch(
 app.post(
   "/students/:student_id/hb-tests",
   requireTeacherAuth,
+  requireJsonBody,
   async (req, res, next) => {
     const { hb_level, test_date } = req.body;
 
@@ -1654,6 +1667,7 @@ app.get("/hb-tests/:test_id", requireSchoolAuth, async (req, res, next) => {
 app.post(
   "/students/:student_id/tablet-courses",
   requireTeacherAuth,
+  requireJsonBody,
   async (req, res, next) => {
     const { test_id, start_date, end_date } = req.body;
 
@@ -1889,6 +1903,7 @@ app.get("/tablet-courses/:course_id", requireTeacherAuth, async (req, res, next)
 app.post(
   "/tablet-courses/:course_id/tablet-doses",
   requireTeacherAuth,
+  requireJsonBody,
   async (req, res, next) => {
     const { scheduled_dates } = req.body;
 
@@ -2124,7 +2139,7 @@ app.get(
   }
 );
 
-app.patch("/tablet-doses/:dose_id", requireParentAuth, async (req, res, next) => {
+app.patch("/tablet-doses/:dose_id", requireParentAuth, requireJsonBody, async (req, res, next) => {
   const requestFields = Object.keys(req.body);
 
   // Validate report action
