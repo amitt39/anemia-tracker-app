@@ -1980,6 +1980,12 @@ app.get(
     // Validate student ID
     if (!requirePositiveIntegerParam(req, res, "student_id")) return;
 
+    if (req.auth_role !== "parent" && req.auth_role !== "teacher") {
+      return res.status(401).json({
+        message: "Parent or teacher authentication required",
+      });
+    }
+
     try {
       if (req.auth_role === "parent") {
         if (
