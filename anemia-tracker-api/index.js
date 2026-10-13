@@ -15,6 +15,66 @@ const parentOtpStore = new Map();
 app.use(cors());
 app.use(express.json());
 
+function createRateLimiter({ windowMs, maxRequests }) {
+  const attempts = new Map();
+  const cleanupIntervalMs = Math.min(windowMs, 60 * 1000);
+  let lastCleanupAt = 0;
+
+  return (req, res, next) => {
+    const key = req.socket.remoteAddress || "unknown";
+    const now = Date.now();
+
+    if (now - lastCleanupAt >= cleanupIntervalMs) {
+      for (const [attemptKey, attemptValue] of attempts.entries()) {
+        if (now >= attemptValue.resetAt) {
+          attempts.delete(attemptKey);
+        }
+      }
+      lastCleanupAt = now;
+    }
+
+    const attempt = attempts.get(key);
+
+    if (!attempt || now >= attempt.resetAt) {
+      attempts.set(key, {
+        count: 1,
+        resetAt: now + windowMs,
+      });
+      return next();
+    }
+
+    if (attempt.count >= maxRequests) {
+      return res.status(429).json({
+        message: "Too many requests. Please try again later.",
+      });
+    }
+
+    attempt.count += 1;
+    attempts.set(key, attempt);
+    return next();
+  };
+}
+
+const schoolLoginLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 10,
+});
+
+const teacherLoginLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 10,
+});
+
+const otpRequestLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 5,
+});
+
+const otpVerifyLimiter = createRateLimiter({
+  windowMs: 5 * 60 * 1000,
+  maxRequests: 10,
+});
+
 // Database connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -163,7 +223,7 @@ app.post("/schools", async (req, res, next) => {
   }
 });
 
-app.post("/schools/login", async (req, res, next) => {
+app.post("/schools/login", schoolLoginLimiter, async (req, res, next) => {
   const { email, password } = req.body;
 
   // Validate credentials
@@ -224,7 +284,7 @@ app.post("/schools/login", async (req, res, next) => {
   }
 });
 
-app.post("/teachers/login", async (req, res, next) => {
+app.post("/teachers/login", teacherLoginLimiter, async (req, res, next) => {
   const { school_id, email, password } = req.body;
 
   // Validate credentials
@@ -891,7 +951,7 @@ function canReturnDevelopmentOtp() {
   );
 }
 
-app.post("/parents/login/request-otp", async (req, res, next) => {
+app.post("/parents/login/request-otp", otpRequestLimiter, async (req, res, next) => {
   const { phone_number } = req.body;
 
   // Validate phone number
@@ -941,7 +1001,7 @@ app.post("/parents/login/request-otp", async (req, res, next) => {
   }
 });
 
-app.post("/parents/login/verify-otp", async (req, res, next) => {
+app.post("/parents/login/verify-otp", otpVerifyLimiter, async (req, res, next) => {
   const { phone_number, otp } = req.body;
 
   // Validate OTP input
