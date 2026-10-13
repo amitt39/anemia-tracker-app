@@ -977,8 +977,8 @@ app.post("/parents/login/request-otp", otpRequestLimiter, async (req, res, next)
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        message: "Parent not found",
+      return res.status(200).json({
+        message: "If the number is registered and eligible, an OTP can be requested.",
       });
     }
 
