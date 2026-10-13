@@ -1015,6 +1015,22 @@ app.post("/parents/login/verify-otp", async (req, res, next) => {
   }
 });
 
+app.get("/parents/me/students", requireParentAuth, async (req, res, next) => {
+  try {
+    // Fetch verified students linked to the authenticated parent
+    const result = await pool.query(
+      "SELECT s.student_id, s.first_name, s.last_name, s.roll_number, s.classroom_id, c.class_name, sc.school_name FROM student_parents sp INNER JOIN students s ON sp.student_id = s.student_id INNER JOIN classrooms c ON s.classroom_id = c.classroom_id INNER JOIN schools sc ON c.school_id = sc.school_id WHERE sp.parent_id = $1 AND sp.status = 'verified' ORDER BY sc.school_name ASC, c.class_name ASC, s.roll_number ASC",
+      [Number(req.parent_id)]
+    );
+
+    return res.status(200).json({
+      students: result.rows,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.post("/parents", requireSchoolAuth, async (req, res, next) => {
   const { phone_number } = req.body;
 
