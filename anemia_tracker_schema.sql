@@ -468,6 +468,14 @@ ALTER TABLE ONLY public.tablet_courses
 
 
 --
+-- Name: tablet_courses tablet_courses_student_id_test_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tablet_courses
+    ADD CONSTRAINT tablet_courses_student_id_test_id_key UNIQUE (student_id, test_id);
+
+
+--
 -- Name: tablet_doses tablet_doses_course_id_scheduled_date_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
