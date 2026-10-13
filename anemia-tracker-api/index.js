@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcrypt");
@@ -8,6 +9,7 @@ const { Pool } = require("pg");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const parentOtpStore = new Map();
 
 // Middleware
 app.use(cors());
@@ -50,6 +52,8 @@ function authMiddleware(req, res, next) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.school_id = decoded.school_id;
     req.teacher_id = decoded.teacher_id;
+    req.auth_role = decoded.role;
+    req.parent_id = decoded.role === "parent" ? decoded.parent_id : undefined;
     next();
   } catch (error) {
     return res.status(401).json({
@@ -58,8 +62,40 @@ function authMiddleware(req, res, next) {
   }
 }
 
+// Authorization guards
+function requireSchoolAuth(req, res, next) {
+  authMiddleware(req, res, () => {
+    if (
+      req.auth_role === "parent" ||
+      !Number.isInteger(Number(req.school_id)) ||
+      Number(req.school_id) <= 0
+    ) {
+      return res.status(401).json({
+        message: "School authentication required",
+      });
+    }
+
+    next();
+  });
+}
+
+function requireTeacherAuth(req, res, next) {
+  requireSchoolAuth(req, res, () => {
+    if (
+      !Number.isInteger(Number(req.teacher_id)) ||
+      Number(req.teacher_id) <= 0
+    ) {
+      return res.status(401).json({
+        message: "Teacher authentication required",
+      });
+    }
+
+    next();
+  });
+}
+
 // Example protected route
-app.get("/api/protected", authMiddleware, (req, res) => {
+app.get("/api/protected", requireSchoolAuth, (req, res) => {
   res.status(200).json({
     message: "Authentication successful",
     school_id: req.school_id,
@@ -230,7 +266,7 @@ app.post("/teachers/login", async (req, res, next) => {
   }
 });
 
-app.post("/teachers", authMiddleware, async (req, res, next) => {
+app.post("/teachers", requireSchoolAuth, async (req, res, next) => {
   const { first_name, last_name, email, password } = req.body;
 
   // Validate required fields
@@ -280,7 +316,7 @@ app.post("/teachers", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.get("/teachers", authMiddleware, async (req, res, next) => {
+app.get("/teachers", requireSchoolAuth, async (req, res, next) => {
   try {
     // Fetch school teachers
     const result = await pool.query(
@@ -297,7 +333,7 @@ app.get("/teachers", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.get("/teachers/:teacher_id", authMiddleware, async (req, res, next) => {
+app.get("/teachers/:teacher_id", requireSchoolAuth, async (req, res, next) => {
   try {
     // Fetch teacher
     const result = await pool.query(
@@ -321,7 +357,7 @@ app.get("/teachers/:teacher_id", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.patch("/teachers/:teacher_id", authMiddleware, async (req, res, next) => {
+app.patch("/teachers/:teacher_id", requireSchoolAuth, async (req, res, next) => {
   const allowedFields = ["first_name", "last_name", "email"];
   const updates = [];
   const values = [];
@@ -381,7 +417,7 @@ app.patch("/teachers/:teacher_id", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.post("/classrooms", authMiddleware, async (req, res, next) => {
+app.post("/classrooms", requireSchoolAuth, async (req, res, next) => {
   const { class_name, teacher_id } = req.body;
 
   // Validate required fields
@@ -441,7 +477,7 @@ app.post("/classrooms", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.get("/classrooms", authMiddleware, async (req, res, next) => {
+app.get("/classrooms", requireSchoolAuth, async (req, res, next) => {
   try {
     // Fetch school classrooms
     const result = await pool.query(
@@ -457,7 +493,7 @@ app.get("/classrooms", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.get("/classrooms/:classroom_id", authMiddleware, async (req, res, next) => {
+app.get("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next) => {
   try {
     // Fetch classroom
     const result = await pool.query(
@@ -479,7 +515,7 @@ app.get("/classrooms/:classroom_id", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.patch("/classrooms/:classroom_id", authMiddleware, async (req, res, next) => {
+app.patch("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next) => {
   const updates = [];
   const values = [];
 
@@ -573,7 +609,7 @@ app.patch("/classrooms/:classroom_id", authMiddleware, async (req, res, next) =>
   }
 });
 
-app.delete("/classrooms/:classroom_id", authMiddleware, async (req, res, next) => {
+app.delete("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next) => {
   try {
     // Delete classroom
     const result = await pool.query(
@@ -595,7 +631,7 @@ app.delete("/classrooms/:classroom_id", authMiddleware, async (req, res, next) =
   }
 });
 
-app.post("/students", authMiddleware, async (req, res, next) => {
+app.post("/students", requireSchoolAuth, async (req, res, next) => {
   const { classroom_id, roll_number, first_name, last_name } = req.body;
 
   // Validate required fields
@@ -654,7 +690,7 @@ app.post("/students", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.get("/students", authMiddleware, async (req, res, next) => {
+app.get("/students", requireSchoolAuth, async (req, res, next) => {
   try {
     // Fetch school students
     const result = await pool.query(
@@ -670,7 +706,7 @@ app.get("/students", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.get("/students/:student_id", authMiddleware, async (req, res, next) => {
+app.get("/students/:student_id", requireSchoolAuth, async (req, res, next) => {
   try {
     // Fetch school student
     const result = await pool.query(
@@ -692,7 +728,7 @@ app.get("/students/:student_id", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.patch("/students/:student_id", authMiddleware, async (req, res, next) => {
+app.patch("/students/:student_id", requireSchoolAuth, async (req, res, next) => {
   const updates = [];
   const values = [];
 
@@ -788,7 +824,7 @@ app.patch("/students/:student_id", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.delete("/students/:student_id", authMiddleware, async (req, res, next) => {
+app.delete("/students/:student_id", requireSchoolAuth, async (req, res, next) => {
   try {
     // Delete school student
     const result = await pool.query(
@@ -810,7 +846,160 @@ app.delete("/students/:student_id", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.post("/parents", authMiddleware, async (req, res, next) => {
+function hashParentOtp(phoneNumber, otp) {
+  return crypto
+    .createHash("sha256")
+    .update(`${phoneNumber}:${otp}:${process.env.JWT_SECRET}`)
+    .digest("hex");
+}
+
+function isParentOtpMatch(expectedHash, phoneNumber, otp) {
+  const actualHash = hashParentOtp(phoneNumber, otp);
+  return crypto.timingSafeEqual(
+    Buffer.from(expectedHash, "hex"),
+    Buffer.from(actualHash, "hex")
+  );
+}
+
+app.post("/parents/login/request-otp", async (req, res, next) => {
+  const { phone_number } = req.body;
+
+  // Validate phone number
+  if (typeof phone_number !== "string" || phone_number.trim() === "") {
+    return res.status(400).json({
+      message: "phone_number is required",
+    });
+  }
+
+  const phoneNumber = phone_number.trim();
+
+  // Block development OTPs in production
+  if (process.env.NODE_ENV === "production") {
+    return res.status(503).json({
+      message: "OTP delivery is not configured",
+    });
+  }
+
+  try {
+    // Find active parent
+    const result = await pool.query(
+      "SELECT parent_id FROM parents WHERE phone_number = $1 AND status = 'active'",
+      [phoneNumber]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        message: "Parent not found",
+      });
+    }
+
+    // Generate development OTP
+    const otp = String(crypto.randomInt(100000, 1000000));
+    parentOtpStore.set(phoneNumber, {
+      parent_id: result.rows[0].parent_id,
+      otp_hash: hashParentOtp(phoneNumber, otp),
+      expires_at: Date.now() + 5 * 60 * 1000,
+      attempts_remaining: 5,
+    });
+
+    return res.status(200).json({
+      message: "OTP generated",
+      otp,
+      expires_in_seconds: 300,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/parents/login/verify-otp", async (req, res, next) => {
+  const { phone_number, otp } = req.body;
+
+  // Validate OTP input
+  if (
+    typeof phone_number !== "string" ||
+    phone_number.trim() === "" ||
+    typeof otp !== "string" ||
+    !/^\d{6}$/.test(otp)
+  ) {
+    return res.status(400).json({
+      message: "phone_number and a valid OTP are required",
+    });
+  }
+
+  const phoneNumber = phone_number.trim();
+  const otpState = parentOtpStore.get(phoneNumber);
+
+  if (!otpState) {
+    return res.status(401).json({
+      message: "Invalid or expired OTP",
+    });
+  }
+
+  if (Date.now() > otpState.expires_at) {
+    parentOtpStore.delete(phoneNumber);
+    return res.status(401).json({
+      message: "Invalid or expired OTP",
+    });
+  }
+
+  if (otpState.attempts_remaining <= 0) {
+    parentOtpStore.delete(phoneNumber);
+    return res.status(401).json({
+      message: "Invalid or expired OTP",
+    });
+  }
+
+  if (!isParentOtpMatch(otpState.otp_hash, phoneNumber, otp)) {
+    otpState.attempts_remaining -= 1;
+
+    if (otpState.attempts_remaining <= 0) {
+      parentOtpStore.delete(phoneNumber);
+    } else {
+      parentOtpStore.set(phoneNumber, otpState);
+    }
+
+    return res.status(401).json({
+      message: "Invalid or expired OTP",
+    });
+  }
+
+  try {
+    // Verify active parent
+    const result = await pool.query(
+      "SELECT parent_id FROM parents WHERE parent_id = $1 AND phone_number = $2 AND status = 'active'",
+      [otpState.parent_id, phoneNumber]
+    );
+
+    if (result.rows.length === 0) {
+      parentOtpStore.delete(phoneNumber);
+      return res.status(401).json({
+        message: "Invalid or expired OTP",
+      });
+    }
+
+    // Issue parent token
+    parentOtpStore.delete(phoneNumber);
+    const token = jwt.sign(
+      {
+        parent_id: result.rows[0].parent_id,
+        role: "parent",
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.status(200).json({
+      message: "Login successful",
+      token,
+      parent_id: result.rows[0].parent_id,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/parents", requireSchoolAuth, async (req, res, next) => {
   const { phone_number } = req.body;
 
   // Validate required fields
@@ -842,7 +1031,7 @@ app.post("/parents", authMiddleware, async (req, res, next) => {
   }
 });
 
-app.get("/parents", authMiddleware, async (req, res, next) => {
+app.get("/parents", requireSchoolAuth, async (req, res, next) => {
   try {
     // Fetch school-linked parents
     const result = await pool.query(
@@ -860,7 +1049,7 @@ app.get("/parents", authMiddleware, async (req, res, next) => {
 
 app.post(
   "/students/:student_id/parents",
-  authMiddleware,
+  requireSchoolAuth,
   async (req, res, next) => {
     const { parent_id, relationship } = req.body;
 
@@ -936,7 +1125,7 @@ app.post(
 
 app.get(
   "/students/:student_id/parents",
-  authMiddleware,
+  requireSchoolAuth,
   async (req, res, next) => {
     try {
       // Verify student ownership
@@ -968,7 +1157,7 @@ app.get(
 
 app.post(
   "/students/:student_id/hb-tests",
-  authMiddleware,
+  requireTeacherAuth,
   async (req, res, next) => {
     const { hb_level, test_date } = req.body;
 
@@ -1067,7 +1256,7 @@ app.post(
 
 app.get(
   "/students/:student_id/hb-tests",
-  authMiddleware,
+  requireSchoolAuth,
   async (req, res, next) => {
     // Validate student ID
     if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
@@ -1104,7 +1293,7 @@ app.get(
   }
 );
 
-app.get("/hb-tests/:test_id", authMiddleware, async (req, res, next) => {
+app.get("/hb-tests/:test_id", requireSchoolAuth, async (req, res, next) => {
   // Validate test ID
   if (!Number.isInteger(Number(req.params.test_id)) || Number(req.params.test_id) <= 0) {
     return res.status(400).json({
@@ -1135,7 +1324,7 @@ app.get("/hb-tests/:test_id", authMiddleware, async (req, res, next) => {
 
 app.post(
   "/students/:student_id/tablet-courses",
-  authMiddleware,
+  requireTeacherAuth,
   async (req, res, next) => {
     const { test_id, start_date, end_date } = req.body;
 
@@ -1251,7 +1440,7 @@ app.post(
 
 app.get(
   "/students/:student_id/tablet-courses",
-  authMiddleware,
+  requireTeacherAuth,
   async (req, res, next) => {
     // Validate student ID
     if (
@@ -1309,7 +1498,7 @@ app.get(
   }
 );
 
-app.get("/tablet-courses/:course_id", authMiddleware, async (req, res, next) => {
+app.get("/tablet-courses/:course_id", requireTeacherAuth, async (req, res, next) => {
   // Validate course ID
   if (
     !Number.isInteger(Number(req.teacher_id)) ||
