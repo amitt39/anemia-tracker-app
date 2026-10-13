@@ -1585,6 +1585,18 @@ app.post(
         });
       }
 
+      // Prevent duplicate tablet courses for the same student and Hb test
+      const existingCourseResult = await pool.query(
+        "SELECT course_id FROM tablet_courses WHERE student_id = $1 AND test_id = $2",
+        [Number(req.params.student_id), Number(test_id)]
+      );
+
+      if (existingCourseResult.rows.length > 0) {
+        return res.status(409).json({
+          message: "Tablet course already exists for this student and Hb test",
+        });
+      }
+
       // Create tablet course
       const result = await pool.query(
         "INSERT INTO tablet_courses (student_id, test_id, start_date, end_date) VALUES ($1, $2, $3, $4) RETURNING course_id, student_id, test_id, start_date, end_date, created_at",
@@ -1596,6 +1608,15 @@ app.post(
       });
     } catch (error) {
       // Handle database constraint errors
+      if (
+        error.code === "23505" &&
+        error.constraint === "tablet_courses_student_id_test_id_key"
+      ) {
+        return res.status(409).json({
+          message: "Tablet course already exists for this student and Hb test",
+        });
+      }
+
       if (error.code === "23503" || error.code === "23514") {
         return res.status(400).json({
           message: "Invalid tablet course data",
