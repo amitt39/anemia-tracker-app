@@ -2123,6 +2123,12 @@ app.use((req, res) => {
 
 // Global error handler
 app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && err.body !== undefined) {
+    return res.status(400).json({
+      message: "Invalid JSON body",
+    });
+  }
+
   console.error("Server error:", err.message);
 
   res.status(500).json({
