@@ -1564,6 +1564,163 @@ app.get("/tablet-courses/:course_id", requireTeacherAuth, async (req, res, next)
   }
 });
 
+app.post(
+  "/tablet-courses/:course_id/tablet-doses",
+  requireTeacherAuth,
+  async (req, res, next) => {
+    const { scheduled_dates } = req.body;
+
+    // Validate course ID
+    if (
+      !Number.isInteger(Number(req.teacher_id)) ||
+      Number(req.teacher_id) <= 0
+    ) {
+      return res.status(401).json({
+        message: "Authenticated teacher is required to create tablet doses",
+      });
+    }
+
+    if (!Number.isInteger(Number(req.params.course_id)) || Number(req.params.course_id) <= 0) {
+      return res.status(400).json({
+        message: "course_id must be a valid tablet course ID",
+      });
+    }
+
+    if (!Array.isArray(scheduled_dates) || scheduled_dates.length === 0) {
+      return res.status(400).json({
+        message: "scheduled_dates must be a non-empty array of dates",
+      });
+    }
+
+    const seenDates = new Set();
+    for (const scheduledDate of scheduled_dates) {
+      if (typeof scheduledDate !== "string") {
+        return res.status(400).json({
+          message: "scheduled_dates must contain valid dates in YYYY-MM-DD format",
+        });
+      }
+
+      const parsedDate = new Date(scheduledDate);
+      if (
+        Number.isNaN(parsedDate.getTime()) ||
+        parsedDate.toISOString().slice(0, 10) !== scheduledDate
+      ) {
+        return res.status(400).json({
+          message: "scheduled_dates must contain valid dates in YYYY-MM-DD format",
+        });
+      }
+
+      if (seenDates.has(scheduledDate)) {
+        return res.status(400).json({
+          message: "scheduled_dates must not contain duplicate dates",
+        });
+      }
+
+      seenDates.add(scheduledDate);
+    }
+
+    let client;
+    let transactionOpen = false;
+
+    async function rollbackTransaction() {
+      if (transactionOpen) {
+        transactionOpen = false;
+        await client.query("ROLLBACK");
+      }
+    }
+
+    try {
+      client = await pool.connect();
+      await client.query("BEGIN");
+      transactionOpen = true;
+
+      // Verify teacher ownership
+      const teacherResult = await client.query(
+        "SELECT teacher_id FROM teachers WHERE teacher_id = $1 AND school_id = $2",
+        [Number(req.teacher_id), req.school_id]
+      );
+
+      if (teacherResult.rows.length === 0) {
+        await rollbackTransaction();
+        return res.status(400).json({
+          message: "Authenticated teacher must belong to this school",
+        });
+      }
+
+      // Fetch school tablet course
+      const courseResult = await client.query(
+        "SELECT tc.course_id, tc.start_date::text AS start_date, tc.end_date::text AS end_date FROM tablet_courses tc INNER JOIN students s ON tc.student_id = s.student_id INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE tc.course_id = $1 AND c.school_id = $2",
+        [Number(req.params.course_id), req.school_id]
+      );
+
+      if (courseResult.rows.length === 0) {
+        await rollbackTransaction();
+        return res.status(404).json({
+          message: "Tablet course not found",
+        });
+      }
+
+      const course = courseResult.rows[0];
+
+      if (
+        scheduled_dates.some(
+          (scheduledDate) =>
+            scheduledDate < course.start_date || scheduledDate > course.end_date
+        )
+      ) {
+        await rollbackTransaction();
+        return res.status(400).json({
+          message: "scheduled_dates must fall within the tablet course dates",
+        });
+      }
+
+      const values = [Number(req.params.course_id)];
+      const placeholders = scheduled_dates.map((scheduledDate, index) => {
+        values.push(scheduledDate);
+        return `($1, $${index + 2})`;
+      });
+
+      const result = await client.query(
+        `INSERT INTO tablet_doses (course_id, scheduled_date) VALUES ${placeholders.join(
+          ", "
+        )} RETURNING dose_id, course_id, scheduled_date, status, taken_at, reported_by`,
+        values
+      );
+
+      await client.query("COMMIT");
+      transactionOpen = false;
+
+      return res.status(201).json({
+        tablet_doses: result.rows,
+      });
+    } catch (error) {
+      try {
+        await rollbackTransaction();
+      } catch (rollbackError) {
+        console.error("Transaction rollback failed:", rollbackError.message);
+      }
+
+      if (error.code === "23505") {
+        return res.status(409).json({
+          message: "Tablet dose already exists for one or more scheduled dates",
+        });
+      }
+
+      if (error.code === "23503" || error.code === "23514") {
+        return res.status(400).json({
+          message: "Invalid tablet dose data",
+        });
+      }
+
+      return next(error);
+    } finally {
+      if (client) {
+        client.release();
+      }
+    }
+  }
+);
+
 app.get(
   "/students/:student_id/tablet-doses",
   authMiddleware,
