@@ -2137,6 +2137,11 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === "") {
+  console.error("JWT_SECRET is required to start the API");
+  process.exit(1);
+}
+
 const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`API running on port ${PORT}`);
 });
