@@ -1388,12 +1388,7 @@ app.patch(
 
     // Validate link identifiers
     if (!requirePositiveIntegerParam(req, res, "student_id")) return;
-
-    if (!Number.isInteger(Number(req.params.parent_id)) || Number(req.params.parent_id) <= 0) {
-      return res.status(400).json({
-        message: "parent_id must be a valid parent ID",
-      });
-    }
+    if (!requirePositiveIntegerParam(req, res, "parent_id")) return;
 
     if (status !== "verified" && status !== "pending") {
       return res.status(400).json({
@@ -1790,11 +1785,7 @@ app.get("/tablet-courses/:course_id", requireTeacherAuth, async (req, res, next)
     });
   }
 
-  if (!Number.isInteger(Number(req.params.course_id)) || Number(req.params.course_id) <= 0) {
-    return res.status(400).json({
-      message: "course_id must be a valid tablet course ID",
-    });
-  }
+  if (!requirePositiveIntegerParam(req, res, "course_id")) return;
 
   try {
     // Verify teacher ownership
@@ -1845,11 +1836,7 @@ app.post(
       });
     }
 
-    if (!Number.isInteger(Number(req.params.course_id)) || Number(req.params.course_id) <= 0) {
-      return res.status(400).json({
-        message: "course_id must be a valid tablet course ID",
-      });
-    }
+    if (!requirePositiveIntegerParam(req, res, "course_id")) return;
 
     if (!Array.isArray(scheduled_dates) || scheduled_dates.length === 0) {
       return res.status(400).json({
@@ -2069,11 +2056,7 @@ app.patch("/tablet-doses/:dose_id", requireParentAuth, async (req, res, next) =>
   const requestFields = Object.keys(req.body);
 
   // Validate report action
-  if (!Number.isInteger(Number(req.params.dose_id)) || Number(req.params.dose_id) <= 0) {
-    return res.status(400).json({
-      message: "dose_id must be a valid tablet dose ID",
-    });
-  }
+  if (!requirePositiveIntegerParam(req, res, "dose_id")) return;
 
   if (
     requestFields.length !== 1 ||
