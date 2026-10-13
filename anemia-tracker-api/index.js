@@ -1171,6 +1171,65 @@ app.get(
   }
 );
 
+app.patch(
+  "/students/:student_id/parents/:parent_id",
+  requireSchoolAuth,
+  async (req, res, next) => {
+    const { status } = req.body;
+
+    // Validate link identifiers
+    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
+      return res.status(400).json({
+        message: "student_id must be a valid student ID",
+      });
+    }
+
+    if (!Number.isInteger(Number(req.params.parent_id)) || Number(req.params.parent_id) <= 0) {
+      return res.status(400).json({
+        message: "parent_id must be a valid parent ID",
+      });
+    }
+
+    if (status !== "verified" && status !== "pending") {
+      return res.status(400).json({
+        message: "status must be either verified or pending",
+      });
+    }
+
+    try {
+      // Update only links for students owned by this school
+      const result = await pool.query(
+        "UPDATE student_parents sp SET status = $1 FROM students s INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE sp.student_id = s.student_id AND sp.student_id = $2 AND sp.parent_id = $3 AND c.school_id = $4 RETURNING sp.student_id, sp.parent_id, sp.relationship, sp.status, sp.created_at",
+        [
+          status,
+          Number(req.params.student_id),
+          Number(req.params.parent_id),
+          req.school_id,
+        ]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          message: "Student-parent link not found",
+        });
+      }
+
+      return res.status(200).json({
+        student_parent: result.rows[0],
+      });
+    } catch (error) {
+      // Handle database constraint errors
+      if (error.code === "23503" || error.code === "23514") {
+        return res.status(400).json({
+          message: "Invalid student-parent link data",
+        });
+      }
+
+      return next(error);
+    }
+  }
+);
+
 app.post(
   "/students/:student_id/hb-tests",
   requireTeacherAuth,
