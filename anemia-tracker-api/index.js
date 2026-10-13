@@ -10,6 +10,8 @@ const { Pool } = require("pg");
 const app = express();
 const PORT = process.env.PORT || 3000;
 const parentOtpStore = new Map();
+let server;
+let shutdownInProgress = false;
 
 // Middleware
 const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8081")
@@ -127,20 +129,29 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
-// Verify database connection
-pool.query("SELECT current_database()", (err, result) => {
-  if (err) {
-    console.error("Database connection failed:", err.message);
-  } else {
-    console.log("Connected to:", result.rows[0].current_database);
-  }
-});
+async function verifyDatabaseConnection() {
+  await pool.query("SELECT 1");
+}
 
 // Public health check
 app.get("/health", (req, res) => {
   res.status(200).json({
-    message: "API is healthy",
+    message: "API process is running",
   });
+});
+
+// Database readiness check
+app.get("/ready", async (req, res) => {
+  try {
+    await verifyDatabaseConnection();
+    return res.status(200).json({
+      message: "API is ready",
+    });
+  } catch (error) {
+    return res.status(503).json({
+      message: "API is not ready",
+    });
+  }
 });
 
 // JWT authentication middleware
@@ -2223,20 +2234,78 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server
-if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === "") {
-  console.error("JWT_SECRET is required to start the API");
-  process.exit(1);
+function validateStartupEnvironment() {
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === "") {
+    throw new Error("JWT_SECRET is required to start the API");
+  }
+
+  if (!process.env.DATABASE_URL || process.env.DATABASE_URL.trim() === "") {
+    throw new Error("DATABASE_URL is required to start the API");
+  }
+
+  if (
+    process.env.NODE_ENV === "production" &&
+    (!process.env.CORS_ORIGINS || process.env.CORS_ORIGINS.trim() === "")
+  ) {
+    throw new Error("CORS_ORIGINS is required in production");
+  }
 }
 
-const server = app.listen(PORT, "0.0.0.0", () => {
-  console.log(`API running on port ${PORT}`);
-});
+async function startServer() {
+  try {
+    validateStartupEnvironment();
+
+    try {
+      await verifyDatabaseConnection();
+    } catch (error) {
+      throw new Error("Database connection failed");
+    }
+
+    server = app.listen(PORT, "0.0.0.0", () => {
+      console.log(`API running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("API startup failed:", error.message);
+    try {
+      await pool.end();
+    } catch (poolError) {
+      console.error("Database pool shutdown failed during startup");
+    }
+    process.exit(1);
+  }
+}
+
+startServer();
 
 // Graceful shutdown
-async function shutdown() {
-  server.close(async () => {
+async function closeDatabasePool() {
+  try {
     await pool.end();
+  } catch (error) {
+    console.error("Database pool shutdown failed");
+  }
+}
+
+async function shutdown() {
+  if (shutdownInProgress) {
+    return;
+  }
+
+  shutdownInProgress = true;
+  const shutdownTimeout = setTimeout(() => {
+    console.error("Graceful shutdown timed out");
+    process.exit(1);
+  }, 10000);
+
+  if (!server) {
+    await closeDatabasePool();
+    clearTimeout(shutdownTimeout);
+    process.exit(0);
+  }
+
+  server.close(async () => {
+    await closeDatabasePool();
+    clearTimeout(shutdownTimeout);
     process.exit(0);
   });
 }
