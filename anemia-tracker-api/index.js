@@ -1133,6 +1133,232 @@ app.get("/hb-tests/:test_id", authMiddleware, async (req, res, next) => {
   }
 });
 
+app.post(
+  "/students/:student_id/tablet-courses",
+  authMiddleware,
+  async (req, res, next) => {
+    const { test_id, start_date, end_date } = req.body;
+
+    // Validate course input
+    const parsedStartDate = new Date(start_date);
+    const parsedEndDate = new Date(end_date);
+
+    if (
+      !Number.isInteger(Number(req.teacher_id)) ||
+      Number(req.teacher_id) <= 0
+    ) {
+      return res.status(401).json({
+        message: "Authenticated teacher is required to create tablet courses",
+      });
+    }
+
+    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
+      return res.status(400).json({
+        message: "student_id must be a valid student ID",
+      });
+    }
+
+    if (!Number.isInteger(Number(test_id)) || Number(test_id) <= 0) {
+      return res.status(400).json({
+        message: "test_id must be a valid Hb test ID",
+      });
+    }
+
+    if (
+      start_date === undefined ||
+      Number.isNaN(parsedStartDate.getTime()) ||
+      parsedStartDate.toISOString().slice(0, 10) !== start_date
+    ) {
+      return res.status(400).json({
+        message: "start_date must be a valid date in YYYY-MM-DD format",
+      });
+    }
+
+    if (
+      end_date === undefined ||
+      Number.isNaN(parsedEndDate.getTime()) ||
+      parsedEndDate.toISOString().slice(0, 10) !== end_date
+    ) {
+      return res.status(400).json({
+        message: "end_date must be a valid date in YYYY-MM-DD format",
+      });
+    }
+
+    if (parsedEndDate < parsedStartDate) {
+      return res.status(400).json({
+        message: "end_date must be on or after start_date",
+      });
+    }
+
+    try {
+      // Verify teacher ownership
+      const teacherResult = await pool.query(
+        "SELECT teacher_id FROM teachers WHERE teacher_id = $1 AND school_id = $2",
+        [Number(req.teacher_id), req.school_id]
+      );
+
+      if (teacherResult.rows.length === 0) {
+        return res.status(400).json({
+          message: "Authenticated teacher must belong to this school",
+        });
+      }
+
+      // Verify student ownership
+      const studentResult = await pool.query(
+        "SELECT s.student_id FROM students s INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE s.student_id = $1 AND c.school_id = $2",
+        [Number(req.params.student_id), req.school_id]
+      );
+
+      if (studentResult.rows.length === 0) {
+        return res.status(404).json({
+          message: "Student not found",
+        });
+      }
+
+      // Verify Hb test ownership
+      const testResult = await pool.query(
+        "SELECT h.test_id FROM hb_tests h INNER JOIN students s ON h.student_id = s.student_id INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE h.test_id = $1 AND h.student_id = $2 AND c.school_id = $3",
+        [Number(test_id), Number(req.params.student_id), req.school_id]
+      );
+
+      if (testResult.rows.length === 0) {
+        return res.status(400).json({
+          message: "test_id must belong to this student",
+        });
+      }
+
+      // Create tablet course
+      const result = await pool.query(
+        "INSERT INTO tablet_courses (student_id, test_id, start_date, end_date) VALUES ($1, $2, $3, $4) RETURNING course_id, student_id, test_id, start_date, end_date, created_at",
+        [Number(req.params.student_id), Number(test_id), start_date, end_date]
+      );
+
+      return res.status(201).json({
+        tablet_course: result.rows[0],
+      });
+    } catch (error) {
+      // Handle database constraint errors
+      if (error.code === "23503" || error.code === "23514") {
+        return res.status(400).json({
+          message: "Invalid tablet course data",
+        });
+      }
+
+      return next(error);
+    }
+  }
+);
+
+app.get(
+  "/students/:student_id/tablet-courses",
+  authMiddleware,
+  async (req, res, next) => {
+    // Validate student ID
+    if (
+      !Number.isInteger(Number(req.teacher_id)) ||
+      Number(req.teacher_id) <= 0
+    ) {
+      return res.status(401).json({
+        message: "Authenticated teacher is required to view tablet courses",
+      });
+    }
+
+    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
+      return res.status(400).json({
+        message: "student_id must be a valid student ID",
+      });
+    }
+
+    try {
+      // Verify teacher ownership
+      const teacherResult = await pool.query(
+        "SELECT teacher_id FROM teachers WHERE teacher_id = $1 AND school_id = $2",
+        [Number(req.teacher_id), req.school_id]
+      );
+
+      if (teacherResult.rows.length === 0) {
+        return res.status(400).json({
+          message: "Authenticated teacher must belong to this school",
+        });
+      }
+
+      // Verify student ownership
+      const studentResult = await pool.query(
+        "SELECT s.student_id FROM students s INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE s.student_id = $1 AND c.school_id = $2",
+        [Number(req.params.student_id), req.school_id]
+      );
+
+      if (studentResult.rows.length === 0) {
+        return res.status(404).json({
+          message: "Student not found",
+        });
+      }
+
+      // Fetch tablet courses
+      const result = await pool.query(
+        "SELECT course_id, student_id, test_id, start_date, end_date, created_at FROM tablet_courses WHERE student_id = $1 ORDER BY start_date DESC, created_at DESC",
+        [Number(req.params.student_id)]
+      );
+
+      return res.status(200).json({
+        tablet_courses: result.rows,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+app.get("/tablet-courses/:course_id", authMiddleware, async (req, res, next) => {
+  // Validate course ID
+  if (
+    !Number.isInteger(Number(req.teacher_id)) ||
+    Number(req.teacher_id) <= 0
+  ) {
+    return res.status(401).json({
+      message: "Authenticated teacher is required to view tablet courses",
+    });
+  }
+
+  if (!Number.isInteger(Number(req.params.course_id)) || Number(req.params.course_id) <= 0) {
+    return res.status(400).json({
+      message: "course_id must be a valid tablet course ID",
+    });
+  }
+
+  try {
+    // Verify teacher ownership
+    const teacherResult = await pool.query(
+      "SELECT teacher_id FROM teachers WHERE teacher_id = $1 AND school_id = $2",
+      [Number(req.teacher_id), req.school_id]
+    );
+
+    if (teacherResult.rows.length === 0) {
+      return res.status(400).json({
+        message: "Authenticated teacher must belong to this school",
+      });
+    }
+
+    // Fetch school tablet course
+    const result = await pool.query(
+      "SELECT tc.course_id, tc.student_id, tc.test_id, tc.start_date, tc.end_date, tc.created_at FROM tablet_courses tc INNER JOIN students s ON tc.student_id = s.student_id INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE tc.course_id = $1 AND c.school_id = $2",
+      [Number(req.params.course_id), req.school_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        message: "Tablet course not found",
+      });
+    }
+
+    return res.status(200).json({
+      tablet_course: result.rows[0],
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 // Handle unknown routes
 app.use((req, res) => {
   res.status(404).json({
