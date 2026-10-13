@@ -41,6 +41,17 @@ function requirePositiveIntegerParam(req, res, paramName) {
   return true;
 }
 
+function requireMaxStringLength(res, fieldName, value, maxLength) {
+  if (value.trim().length > maxLength) {
+    res.status(400).json({
+      message: `${fieldName} must be at most ${maxLength} characters`,
+    });
+    return false;
+  }
+
+  return true;
+}
+
 function createRateLimiter({ windowMs, maxRequests }) {
   const attempts = new Map();
   const cleanupIntervalMs = Math.min(windowMs, 60 * 1000);
@@ -239,6 +250,13 @@ app.post("/schools", async (req, res, next) => {
     });
   }
 
+  if (
+    !requireMaxStringLength(res, "school_name", school_name, 100) ||
+    !requireMaxStringLength(res, "email", email, 255)
+  ) {
+    return;
+  }
+
   try {
     // Hash password
     const passwordHash = await bcrypt.hash(password, 10);
@@ -409,6 +427,14 @@ app.post("/teachers", requireSchoolAuth, async (req, res, next) => {
     });
   }
 
+  if (
+    !requireMaxStringLength(res, "first_name", first_name, 50) ||
+    !requireMaxStringLength(res, "last_name", last_name, 50) ||
+    !requireMaxStringLength(res, "email", email, 255)
+  ) {
+    return;
+  }
+
   try {
     // Hash password
     const passwordHash = await bcrypt.hash(password, 10);
@@ -500,6 +526,9 @@ app.patch("/teachers/:teacher_id", requireSchoolAuth, async (req, res, next) => 
         });
       }
 
+      const maxLength = field === "email" ? 255 : 50;
+      if (!requireMaxStringLength(res, field, value, maxLength)) return;
+
       values.push(value.trim());
       updates.push(`${field} = $${values.length}`);
     }
@@ -553,6 +582,8 @@ app.post("/classrooms", requireSchoolAuth, async (req, res, next) => {
       message: "class_name is required",
     });
   }
+
+  if (!requireMaxStringLength(res, "class_name", class_name, 50)) return;
 
   // Validate optional teacher
   if (
@@ -658,6 +689,8 @@ app.patch("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next)
       });
     }
 
+    if (!requireMaxStringLength(res, "class_name", class_name, 50)) return;
+
     values.push(class_name.trim());
     updates.push(`class_name = $${values.length}`);
   }
@@ -757,6 +790,12 @@ app.delete("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next
       message: "Classroom deleted successfully",
     });
   } catch (error) {
+    if (error.code === "23503") {
+      return res.status(409).json({
+        message: "Cannot delete classroom with related records",
+      });
+    }
+
     return next(error);
   }
 });
@@ -779,6 +818,13 @@ app.post("/students", requireSchoolAuth, async (req, res, next) => {
       message:
         "classroom_id, positive roll_number, first_name, and last_name are required",
     });
+  }
+
+  if (
+    !requireMaxStringLength(res, "first_name", first_name, 50) ||
+    !requireMaxStringLength(res, "last_name", last_name, 50)
+  ) {
+    return;
   }
 
   try {
@@ -887,6 +933,8 @@ app.patch("/students/:student_id", requireSchoolAuth, async (req, res, next) => 
       });
     }
 
+    if (!requireMaxStringLength(res, "first_name", first_name, 50)) return;
+
     values.push(first_name.trim());
     updates.push(`first_name = $${values.length}`);
   }
@@ -899,6 +947,8 @@ app.patch("/students/:student_id", requireSchoolAuth, async (req, res, next) => 
         message: "last_name must be a non-empty string",
       });
     }
+
+    if (!requireMaxStringLength(res, "last_name", last_name, 50)) return;
 
     values.push(last_name.trim());
     updates.push(`last_name = $${values.length}`);
@@ -975,6 +1025,12 @@ app.delete("/students/:student_id", requireSchoolAuth, async (req, res, next) =>
       message: "Student deleted successfully",
     });
   } catch (error) {
+    if (error.code === "23503") {
+      return res.status(409).json({
+        message: "Cannot delete student with related records",
+      });
+    }
+
     return next(error);
   }
 });
@@ -1232,6 +1288,8 @@ app.post("/parents", requireSchoolAuth, async (req, res, next) => {
     });
   }
 
+  if (!requireMaxStringLength(res, "phone_number", phone_number, 20)) return;
+
   try {
     // Create parent
     const result = await pool.query(
@@ -1292,6 +1350,14 @@ app.post(
       return res.status(400).json({
         message: "relationship must be a non-empty string",
       });
+    }
+
+    if (
+      relationship !== undefined &&
+      relationship !== null &&
+      !requireMaxStringLength(res, "relationship", relationship, 30)
+    ) {
+      return;
     }
 
     try {
