@@ -94,6 +94,22 @@ function requireTeacherAuth(req, res, next) {
   });
 }
 
+function requireParentAuth(req, res, next) {
+  authMiddleware(req, res, () => {
+    if (
+      req.auth_role !== "parent" ||
+      !Number.isInteger(Number(req.parent_id)) ||
+      Number(req.parent_id) <= 0
+    ) {
+      return res.status(401).json({
+        message: "Parent authentication required",
+      });
+    }
+
+    next();
+  });
+}
+
 // Example protected route
 app.get("/api/protected", requireSchoolAuth, (req, res) => {
   res.status(200).json({
@@ -1544,6 +1560,155 @@ app.get("/tablet-courses/:course_id", requireTeacherAuth, async (req, res, next)
       tablet_course: result.rows[0],
     });
   } catch (error) {
+    return next(error);
+  }
+});
+
+app.get(
+  "/students/:student_id/tablet-doses",
+  authMiddleware,
+  async (req, res, next) => {
+    // Validate student ID
+    if (!Number.isInteger(Number(req.params.student_id)) || Number(req.params.student_id) <= 0) {
+      return res.status(400).json({
+        message: "student_id must be a valid student ID",
+      });
+    }
+
+    try {
+      if (req.auth_role === "parent") {
+        if (
+          !Number.isInteger(Number(req.parent_id)) ||
+          Number(req.parent_id) <= 0
+        ) {
+          return res.status(401).json({
+            message: "Parent authentication required",
+          });
+        }
+
+        // Verify verified parent-student link
+        const linkResult = await pool.query(
+          "SELECT student_id FROM student_parents WHERE student_id = $1 AND parent_id = $2 AND status = 'verified'",
+          [Number(req.params.student_id), Number(req.parent_id)]
+        );
+
+        if (linkResult.rows.length === 0) {
+          return res.status(404).json({
+            message: "Student not found",
+          });
+        }
+      } else {
+        if (
+          !Number.isInteger(Number(req.teacher_id)) ||
+          Number(req.teacher_id) <= 0
+        ) {
+          return res.status(401).json({
+            message: "Teacher authentication required",
+          });
+        }
+
+        // Verify teacher ownership
+        const teacherResult = await pool.query(
+          "SELECT teacher_id FROM teachers WHERE teacher_id = $1 AND school_id = $2",
+          [Number(req.teacher_id), req.school_id]
+        );
+
+        if (teacherResult.rows.length === 0) {
+          return res.status(400).json({
+            message: "Authenticated teacher must belong to this school",
+          });
+        }
+
+        // Verify student ownership
+        const studentResult = await pool.query(
+          "SELECT s.student_id FROM students s INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE s.student_id = $1 AND c.school_id = $2",
+          [Number(req.params.student_id), req.school_id]
+        );
+
+        if (studentResult.rows.length === 0) {
+          return res.status(404).json({
+            message: "Student not found",
+          });
+        }
+      }
+
+      // Fetch student tablet doses
+      const result = await pool.query(
+        "SELECT td.dose_id, td.course_id, td.scheduled_date, td.status, td.taken_at, td.reported_by FROM tablet_doses td INNER JOIN tablet_courses tc ON td.course_id = tc.course_id WHERE tc.student_id = $1 ORDER BY td.scheduled_date ASC, td.created_at ASC",
+        [Number(req.params.student_id)]
+      );
+
+      return res.status(200).json({
+        tablet_doses: result.rows,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+app.patch("/tablet-doses/:dose_id", requireParentAuth, async (req, res, next) => {
+  const requestFields = Object.keys(req.body);
+
+  // Validate report action
+  if (!Number.isInteger(Number(req.params.dose_id)) || Number(req.params.dose_id) <= 0) {
+    return res.status(400).json({
+      message: "dose_id must be a valid tablet dose ID",
+    });
+  }
+
+  if (
+    requestFields.length !== 1 ||
+    !Object.prototype.hasOwnProperty.call(req.body, "status") ||
+    req.body.status !== "taken"
+  ) {
+    return res.status(400).json({
+      message: "Only status: taken is allowed",
+    });
+  }
+
+  try {
+    // Verify parent can report dose
+    const doseResult = await pool.query(
+      "SELECT td.dose_id, td.status FROM tablet_doses td INNER JOIN tablet_courses tc ON td.course_id = tc.course_id INNER JOIN student_parents sp ON tc.student_id = sp.student_id WHERE td.dose_id = $1 AND sp.parent_id = $2 AND sp.status = 'verified'",
+      [Number(req.params.dose_id), Number(req.parent_id)]
+    );
+
+    if (doseResult.rows.length === 0) {
+      return res.status(404).json({
+        message: "Tablet dose not found",
+      });
+    }
+
+    if (doseResult.rows[0].status !== "scheduled") {
+      return res.status(400).json({
+        message: "Tablet dose has already been reported",
+      });
+    }
+
+    // Mark dose as taken
+    const result = await pool.query(
+      "UPDATE tablet_doses SET status = 'taken', taken_at = now(), reported_by = $1 WHERE dose_id = $2 AND status = 'scheduled' RETURNING dose_id, course_id, scheduled_date, status, taken_at, reported_by",
+      [Number(req.parent_id), Number(req.params.dose_id)]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({
+        message: "Tablet dose has already been reported",
+      });
+    }
+
+    return res.status(200).json({
+      tablet_dose: result.rows[0],
+    });
+  } catch (error) {
+    // Handle database constraint errors
+    if (error.code === "23503" || error.code === "23514") {
+      return res.status(400).json({
+        message: "Invalid tablet dose data",
+      });
+    }
+
     return next(error);
   }
 });
