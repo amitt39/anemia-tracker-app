@@ -28,6 +28,19 @@ app.use(cors({
 }));
 app.use(express.json());
 
+function requirePositiveIntegerParam(req, res, paramName) {
+  const value = req.params[paramName];
+
+  if (!/^[1-9]\d*$/.test(value || "")) {
+    res.status(400).json({
+      message: `${paramName} must be a positive integer`,
+    });
+    return false;
+  }
+
+  return true;
+}
+
 function createRateLimiter({ windowMs, maxRequests }) {
   const attempts = new Map();
   const cleanupIntervalMs = Math.min(windowMs, 60 * 1000);
@@ -445,6 +458,8 @@ app.get("/teachers", requireSchoolAuth, async (req, res, next) => {
 });
 
 app.get("/teachers/:teacher_id", requireSchoolAuth, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "teacher_id")) return;
+
   try {
     // Fetch teacher
     const result = await pool.query(
@@ -469,6 +484,7 @@ app.get("/teachers/:teacher_id", requireSchoolAuth, async (req, res, next) => {
 });
 
 app.patch("/teachers/:teacher_id", requireSchoolAuth, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "teacher_id")) return;
   const allowedFields = ["first_name", "last_name", "email"];
   const updates = [];
   const values = [];
@@ -605,6 +621,7 @@ app.get("/classrooms", requireSchoolAuth, async (req, res, next) => {
 });
 
 app.get("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "classroom_id")) return;
   try {
     // Fetch classroom
     const result = await pool.query(
@@ -627,6 +644,7 @@ app.get("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next) =
 });
 
 app.patch("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "classroom_id")) return;
   const updates = [];
   const values = [];
 
@@ -721,6 +739,7 @@ app.patch("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next)
 });
 
 app.delete("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "classroom_id")) return;
   try {
     // Delete classroom
     const result = await pool.query(
@@ -818,6 +837,7 @@ app.get("/students", requireSchoolAuth, async (req, res, next) => {
 });
 
 app.get("/students/:student_id", requireSchoolAuth, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "student_id")) return;
   try {
     // Fetch school student
     const result = await pool.query(
@@ -840,6 +860,7 @@ app.get("/students/:student_id", requireSchoolAuth, async (req, res, next) => {
 });
 
 app.patch("/students/:student_id", requireSchoolAuth, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "student_id")) return;
   const updates = [];
   const values = [];
 
@@ -936,6 +957,7 @@ app.patch("/students/:student_id", requireSchoolAuth, async (req, res, next) => 
 });
 
 app.delete("/students/:student_id", requireSchoolAuth, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "student_id")) return;
   try {
     // Delete school student
     const result = await pool.query(
