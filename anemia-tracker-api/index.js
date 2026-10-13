@@ -1395,29 +1395,24 @@ app.post(
         });
       }
 
-      // Verify parent exists
-      const parentResult = await pool.query(
-        "SELECT parent_id FROM parents WHERE parent_id = $1",
-        [Number(parent_id)]
-      );
-
-      if (parentResult.rows.length === 0) {
-        return res.status(400).json({
-          message: "parent_id must reference an existing parent",
-        });
-      }
-
-      // Link parent to student
+      // Link only parents already associated with this school.
       const result = await pool.query(
-        "INSERT INTO student_parents (student_id, parent_id, relationship, status) VALUES ($1, $2, $3, 'pending') RETURNING student_id, parent_id, relationship, status, created_at",
+        "INSERT INTO student_parents (student_id, parent_id, relationship, status) SELECT $1, p.parent_id, $3, 'pending' FROM parents p WHERE p.parent_id = $2 AND EXISTS (SELECT 1 FROM student_parents sp INNER JOIN students s ON sp.student_id = s.student_id INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE sp.parent_id = p.parent_id AND c.school_id = $4) RETURNING student_id, parent_id, relationship, status, created_at",
         [
           req.params.student_id,
           Number(parent_id),
           relationship === undefined || relationship === null
             ? null
             : relationship.trim(),
+          req.school_id,
         ]
       );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          message: "Student or parent not found",
+        });
+      }
 
       return res.status(201).json({
         student_parent: result.rows[0],
@@ -2185,9 +2180,9 @@ app.patch("/tablet-doses/:dose_id", requireParentAuth, requireJsonBody, async (r
       });
     }
 
-    // Mark dose as taken
+    // Mark dose as taken only when the authenticated parent owns the linked student.
     const result = await pool.query(
-      "UPDATE tablet_doses SET status = 'taken', taken_at = now(), reported_by = $1 WHERE dose_id = $2 AND status = 'scheduled' RETURNING dose_id, course_id, scheduled_date, status, taken_at, reported_by",
+      "UPDATE tablet_doses td SET status = 'taken', taken_at = now(), reported_by = $1 FROM tablet_courses tc INNER JOIN student_parents sp ON tc.student_id = sp.student_id WHERE td.course_id = tc.course_id AND td.dose_id = $2 AND td.status = 'scheduled' AND sp.parent_id = $1 AND sp.status = 'verified' RETURNING td.dose_id, td.course_id, td.scheduled_date, td.status, td.taken_at, td.reported_by",
       [Number(req.parent_id), Number(req.params.dose_id)]
     );
 
@@ -2275,7 +2270,9 @@ async function startServer() {
   }
 }
 
-startServer();
+if (require.main === module) {
+  startServer();
+}
 
 // Graceful shutdown
 async function closeDatabasePool() {
@@ -2312,3 +2309,8 @@ async function shutdown() {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+module.exports = {
+  app,
+  pool,
+};
