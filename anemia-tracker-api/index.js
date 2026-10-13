@@ -1284,6 +1284,7 @@ app.post(
   "/students/:student_id/parents",
   requireSchoolAuth,
   async (req, res, next) => {
+    if (!requirePositiveIntegerParam(req, res, "student_id")) return;
     const { parent_id, relationship } = req.body;
 
     // Validate required fields
@@ -1360,6 +1361,7 @@ app.get(
   "/students/:student_id/parents",
   requireSchoolAuth,
   async (req, res, next) => {
+    if (!requirePositiveIntegerParam(req, res, "student_id")) return;
     try {
       // Verify student ownership
       const studentResult = await pool.query(
