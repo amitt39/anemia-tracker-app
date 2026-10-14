@@ -6,6 +6,15 @@ const cors = require("cors");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { Pool } = require("pg");
+const {
+  createOtpRequestSuccessResponse,
+  getOtpCooldownState,
+  isMockOtpSmsProviderEnabled,
+  isOtpSmsDeliveryConfigured,
+  normalizePhoneNumber,
+  recordOtpRequestCooldown,
+  sendOtpSms,
+} = require("./otp");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1071,13 +1080,6 @@ function isParentOtpMatch(expectedHash, phoneNumber, otp) {
   );
 }
 
-function canReturnDevelopmentOtp() {
-  return (
-    process.env.NODE_ENV !== "production" &&
-    process.env.ALLOW_DEV_OTP === "true"
-  );
-}
-
 app.post("/parents/login/request-otp", otpRequestLimiter, requireJsonBody, async (req, res, next) => {
   const { phone_number } = req.body;
 
@@ -1088,13 +1090,24 @@ app.post("/parents/login/request-otp", otpRequestLimiter, requireJsonBody, async
     });
   }
 
-  const phoneNumber = phone_number.trim();
+  const phoneNumber = normalizePhoneNumber(phone_number);
 
-  if (!canReturnDevelopmentOtp()) {
+  if (!isOtpSmsDeliveryConfigured()) {
     return res.status(503).json({
       message: "OTP delivery is not configured",
     });
   }
+
+  const cooldownState = getOtpCooldownState(phoneNumber);
+
+  if (!cooldownState.allowed) {
+    return res.status(429).json({
+      message: "OTP was requested recently. Please try again later.",
+      retry_after_seconds: cooldownState.retryAfterSeconds,
+    });
+  }
+
+  recordOtpRequestCooldown(phoneNumber);
 
   try {
     // Find active parent
@@ -1104,12 +1117,9 @@ app.post("/parents/login/request-otp", otpRequestLimiter, requireJsonBody, async
     );
 
     if (result.rows.length === 0) {
-      return res.status(200).json({
-        message: "If the number is registered and eligible, an OTP can be requested.",
-      });
+      return res.status(200).json(createOtpRequestSuccessResponse());
     }
 
-    // Generate development OTP only when explicitly enabled outside production
     const otp = String(crypto.randomInt(100000, 1000000));
     parentOtpStore.set(phoneNumber, {
       parent_id: result.rows[0].parent_id,
@@ -1118,11 +1128,11 @@ app.post("/parents/login/request-otp", otpRequestLimiter, requireJsonBody, async
       attempts_remaining: 5,
     });
 
-    return res.status(200).json({
-      message: "OTP generated",
-      otp,
-      expires_in_seconds: 300,
-    });
+    if (isMockOtpSmsProviderEnabled()) {
+      await sendOtpSms(phoneNumber, otp);
+    }
+
+    return res.status(200).json(createOtpRequestSuccessResponse(otp));
   } catch (error) {
     return next(error);
   }
