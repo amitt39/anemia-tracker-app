@@ -39,10 +39,13 @@ export function getSchoolProfile(token) { return request('/schools/me', { header
 export function getTeachers(token) { return request('/teachers', { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function getTeacher(token, teacherId) { return request(`/teachers/${teacherId}`, { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function getClassrooms(token) { return request('/classrooms', { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getClassroom(token, classroomId) { return request(`/classrooms/${classroomId}`, { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getClassroomStudents(token, classroomId) { return request(`/classrooms/${classroomId}/students`, { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function getStudents(token) { return request('/students', { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function createTeacher(token, data) { return request('/teachers', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
 export function updateTeacher(token, teacherId, data) { return request(`/teachers/${teacherId}`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
 export function updateTeacherStatus(token, teacherId, isActive) { return request(`/teachers/${teacherId}/status`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ is_active: isActive }) }, true); }
 export function createClassroom(token, data) { return request('/classrooms', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
 export function updateClassroom(token, classroomId, data) { return request(`/classrooms/${classroomId}`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
+export function deleteClassroom(token, classroomId) { return request(`/classrooms/${classroomId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, true); }
 export function createStudent(token, data) { return request('/students', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }

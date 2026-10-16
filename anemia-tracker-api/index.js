@@ -705,7 +705,7 @@ app.post("/classrooms", requireSchoolAuth, requireJsonBody, async (req, res, nex
     // Verify teacher ownership
     if (assignedTeacherId !== null) {
       const teacherResult = await pool.query(
-        "SELECT teacher_id FROM teachers WHERE teacher_id = $1 AND school_id = $2",
+        "SELECT teacher_id, is_active FROM teachers WHERE teacher_id = $1 AND school_id = $2",
         [assignedTeacherId, req.school_id]
       );
 
@@ -713,6 +713,9 @@ app.post("/classrooms", requireSchoolAuth, requireJsonBody, async (req, res, nex
         return res.status(400).json({
           message: "teacher_id must belong to this school",
         });
+      }
+      if (!teacherResult.rows[0].is_active) {
+        return res.status(400).json({ message: "Cannot assign an inactive teacher" });
       }
     }
 
@@ -839,7 +842,7 @@ app.patch("/classrooms/:classroom_id", requireSchoolAuth, requireJsonBody, async
       req.body.teacher_id !== null
     ) {
       const teacherResult = await pool.query(
-        "SELECT teacher_id FROM teachers WHERE teacher_id = $1 AND school_id = $2",
+        "SELECT teacher_id, is_active FROM teachers WHERE teacher_id = $1 AND school_id = $2",
         [Number(req.body.teacher_id), req.school_id]
       );
 
@@ -847,6 +850,9 @@ app.patch("/classrooms/:classroom_id", requireSchoolAuth, requireJsonBody, async
         return res.status(400).json({
           message: "teacher_id must belong to this school",
         });
+      }
+      if (!teacherResult.rows[0].is_active) {
+        return res.status(400).json({ message: "Cannot assign an inactive teacher" });
       }
     }
 
@@ -899,6 +905,24 @@ app.delete("/classrooms/:classroom_id", requireSchoolAuth, async (req, res, next
       });
     }
 
+    return next(error);
+  }
+});
+
+app.get("/classrooms/:classroom_id/students", requireSchoolAuth, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "classroom_id")) return;
+  try {
+    const classroomResult = await pool.query(
+      "SELECT classroom_id FROM classrooms WHERE classroom_id = $1 AND school_id = $2",
+      [req.params.classroom_id, req.school_id]
+    );
+    if (classroomResult.rows.length === 0) return res.status(404).json({ message: "Classroom not found" });
+    const result = await pool.query(
+      "SELECT student_id, classroom_id, roll_number, first_name, last_name, is_flagged, created_at FROM students WHERE classroom_id = $1 ORDER BY roll_number ASC, created_at ASC",
+      [req.params.classroom_id]
+    );
+    return res.status(200).json({ students: result.rows });
+  } catch (error) {
     return next(error);
   }
 });

@@ -90,6 +90,7 @@ async function createFixtures() {
     "INSERT INTO classrooms (school_id, teacher_id, class_name) VALUES ($1, $2, $3) RETURNING classroom_id",
     [schoolA.school_id, teacherA.teacher_id, `Class A ${suffix}`]
   );
+  trackedFixtures.classroomNameA = `Class A ${suffix}`;
   trackedFixtures.classrooms.push(classroomA.classroom_id);
 
   const classroomB = await insertRow(
@@ -365,6 +366,59 @@ test("classroom assignment rejects a teacher from another school", { skip: skipR
   });
   assert.equal(response.status, 400);
   assert.deepEqual(response.body, { message: "teacher_id must belong to this school" });
+});
+
+test("classroom list, detail, and students are isolated by school", { skip: skipReason }, async () => {
+  const list = await request("/classrooms", {
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+  });
+  assert.equal(list.status, 200);
+  assert.equal(list.body.classrooms.some((item) => item.classroom_id === fixtures.classrooms[1]), false);
+
+  const detail = await request(`/classrooms/${fixtures.classrooms[0]}`, {
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+  });
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.classroom.class_name.startsWith("Class A"), true);
+
+  const students = await request(`/classrooms/${fixtures.classrooms[0]}/students`, {
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+  });
+  assert.equal(students.status, 200);
+  assert.equal(students.body.students.length, 3);
+
+  const foreignStudents = await request(`/classrooms/${fixtures.classrooms[1]}/students`, {
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+  });
+  assert.equal(foreignStudents.status, 404);
+});
+
+test("classroom creation rejects duplicates and inactive teacher assignment", { skip: skipReason }, async () => {
+  const duplicate = await request("/classrooms", {
+    method: "POST",
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+    body: JSON.stringify({ class_name: fixtures.classroomNameA }),
+  });
+  assert.equal([400, 409].includes(duplicate.status), true);
+
+  await pool.query("UPDATE teachers SET is_active = FALSE WHERE teacher_id = $1", [fixtures.teacherA.teacher_id]);
+  const inactive = await request(`/classrooms/${fixtures.classrooms[0]}`, {
+    method: "PATCH",
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+    body: JSON.stringify({ teacher_id: fixtures.teacherA.teacher_id }),
+  });
+  assert.equal(inactive.status, 400);
+  assert.deepEqual(inactive.body, { message: "Cannot assign an inactive teacher" });
+  await pool.query("UPDATE teachers SET is_active = TRUE WHERE teacher_id = $1", [fixtures.teacherA.teacher_id]);
+});
+
+test("classroom deletion preserves related records by refusing deletion", { skip: skipReason }, async () => {
+  const response = await request(`/classrooms/${fixtures.classrooms[0]}`, {
+    method: "DELETE",
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+  });
+  assert.equal(response.status, 409);
+  assert.deepEqual(response.body, { message: "Cannot delete classroom with related records" });
 });
 
 test(
