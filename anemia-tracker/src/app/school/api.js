@@ -49,6 +49,15 @@ export function getParents(token) { return request('/parents', { headers: { Auth
 export function getStudentParents(token, studentId) { return request(`/students/${studentId}/parents`, { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function linkStudentParent(token, studentId, parentId, relationship) { return request(`/students/${studentId}/parents`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ parent_id: parentId, relationship }) }, true); }
 export function updateStudentParentStatus(token, studentId, parentId, status) { return request(`/students/${studentId}/parents/${parentId}`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ status }) }, true); }
+export function getSchoolParents(token) { return request('/school/parents', { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function inviteSchoolParent(token, phoneNumber) { return request('/school/parents/invitations', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ phone_number: phoneNumber }) }, true); }
+export function revokeSchoolParent(token, parentId) { return request(`/school/parents/${parentId}/revoke`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({}) }, true); }
+export function requestParentOtp(phoneNumber) { return request('/parents/login/request-otp', { method: 'POST', body: JSON.stringify({ phone_number: phoneNumber }) }); }
+export function verifyParentOtp(phoneNumber, otp) { return request('/parents/login/verify-otp', { method: 'POST', body: JSON.stringify({ phone_number: phoneNumber, otp }) }); }
+export function getParentInvitations(token) { return request('/parents/me/school-invitations', { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function updateParentInvitation(token, schoolId, status) { return request(`/parents/me/school-invitations/${schoolId}`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ status }) }, true); }
+export function getPendingParentStudentLinks(token) { return request('/parents/me/pending-student-links', { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function acceptParentStudentLink(token, studentId, accepted) { return request(`/parents/me/students/${studentId}/accept`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ accepted }) }, true); }
 export function createTeacher(token, data) { return request('/teachers', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
 export function updateTeacher(token, teacherId, data) { return request(`/teachers/${teacherId}`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
 export function updateTeacherStatus(token, teacherId, isActive) { return request(`/teachers/${teacherId}/status`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ is_active: isActive }) }, true); }

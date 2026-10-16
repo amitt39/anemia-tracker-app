@@ -266,6 +266,14 @@ function requireParentAuth(req, res, next) {
   });
 }
 
+async function requireActiveSchoolParent(parentId, schoolId) {
+  const result = await pool.query(
+    "SELECT 1 FROM school_parents WHERE parent_id = $1 AND school_id = $2 AND status = 'active'",
+    [Number(parentId), Number(schoolId)]
+  );
+  return result.rows.length > 0;
+}
+
 // Example protected route
 app.get("/api/protected", requireSchoolAuth, (req, res) => {
   res.status(200).json({
@@ -1303,7 +1311,7 @@ app.post("/parents/login/verify-otp", otpVerifyLimiter, requireJsonBody, async (
   try {
     // Verify active parent
     const result = await pool.query(
-      "SELECT parent_id FROM parents WHERE parent_id = $1 AND phone_number = $2 AND status = 'active'",
+      "UPDATE parents SET phone_verified_at = COALESCE(phone_verified_at, now()) WHERE parent_id = $1 AND phone_number = $2 AND status = 'active' RETURNING parent_id",
       [otpState.parent_id, phoneNumber]
     );
 
@@ -1339,7 +1347,7 @@ app.get("/parents/me/students", requireParentAuth, async (req, res, next) => {
   try {
     // Fetch verified students linked to the authenticated parent
     const result = await pool.query(
-      "SELECT s.student_id, s.first_name, s.last_name, s.roll_number, s.classroom_id, c.class_name, sc.school_name FROM student_parents sp INNER JOIN students s ON sp.student_id = s.student_id INNER JOIN classrooms c ON s.classroom_id = c.classroom_id INNER JOIN schools sc ON c.school_id = sc.school_id WHERE sp.parent_id = $1 AND sp.status = 'verified' ORDER BY sc.school_name ASC, c.class_name ASC, s.roll_number ASC",
+      "SELECT s.student_id, s.first_name, s.last_name, s.roll_number, s.classroom_id, c.class_name, sc.school_name FROM student_parents sp INNER JOIN students s ON sp.student_id = s.student_id INNER JOIN classrooms c ON s.classroom_id = c.classroom_id INNER JOIN schools sc ON c.school_id = sc.school_id INNER JOIN school_parents shp ON shp.school_id = c.school_id AND shp.parent_id = sp.parent_id AND shp.status = 'active' WHERE sp.parent_id = $1 AND sp.status = 'verified' ORDER BY sc.school_name ASC, c.class_name ASC, s.roll_number ASC",
       [Number(req.parent_id)]
     );
 
@@ -1351,6 +1359,16 @@ app.get("/parents/me/students", requireParentAuth, async (req, res, next) => {
   }
 });
 
+app.get("/parents/me/pending-student-links", requireParentAuth, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      "SELECT sp.student_id, sp.parent_id, sp.relationship, sp.status, sp.parent_accepted_at, sp.school_confirmed_at, s.first_name, s.last_name, s.roll_number, c.class_name, c.school_id, sc.school_name FROM student_parents sp INNER JOIN students s ON s.student_id = sp.student_id INNER JOIN classrooms c ON c.classroom_id = s.classroom_id INNER JOIN schools sc ON sc.school_id = c.school_id INNER JOIN school_parents shp ON shp.school_id = c.school_id AND shp.parent_id = sp.parent_id AND shp.status = 'active' WHERE sp.parent_id = $1 AND sp.status = 'pending' ORDER BY sc.school_name ASC, c.class_name ASC, s.roll_number ASC",
+      [Number(req.parent_id)]
+    );
+    return res.status(200).json({ student_links: result.rows });
+  } catch (error) { return next(error); }
+});
+
 app.get(
   "/parents/me/students/:student_id/hb-tests",
   requireParentAuth,
@@ -1360,7 +1378,7 @@ app.get(
     try {
       // Verify verified parent-student link
       const linkResult = await pool.query(
-        "SELECT student_id FROM student_parents WHERE student_id = $1 AND parent_id = $2 AND status = 'verified'",
+        "SELECT sp.student_id FROM student_parents sp INNER JOIN students s ON s.student_id = sp.student_id INNER JOIN classrooms c ON c.classroom_id = s.classroom_id INNER JOIN school_parents shp ON shp.school_id = c.school_id AND shp.parent_id = sp.parent_id AND shp.status = 'active' WHERE sp.student_id = $1 AND sp.parent_id = $2 AND sp.status = 'verified'",
         [Number(req.params.student_id), Number(req.parent_id)]
       );
 
@@ -1394,7 +1412,7 @@ app.get(
     try {
       // Verify verified parent-student link
       const linkResult = await pool.query(
-        "SELECT student_id FROM student_parents WHERE student_id = $1 AND parent_id = $2 AND status = 'verified'",
+        "SELECT sp.student_id FROM student_parents sp INNER JOIN students s ON s.student_id = sp.student_id INNER JOIN classrooms c ON c.classroom_id = s.classroom_id INNER JOIN school_parents shp ON shp.school_id = c.school_id AND shp.parent_id = sp.parent_id AND shp.status = 'active' WHERE sp.student_id = $1 AND sp.parent_id = $2 AND sp.status = 'verified'",
         [Number(req.params.student_id), Number(req.parent_id)]
       );
 
@@ -1418,6 +1436,63 @@ app.get(
     }
   }
 );
+
+app.post("/school/parents/invitations", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
+  const phoneNumber = typeof req.body.phone_number === "string" ? normalizePhoneNumber(req.body.phone_number) : "";
+  if (!phoneNumber) return res.status(400).json({ message: "phone_number is required" });
+  try {
+    await pool.query("BEGIN");
+    const parent = await pool.query(
+      "INSERT INTO parents (phone_number) VALUES ($1) ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number RETURNING parent_id, phone_number, phone_verified_at, status, created_at",
+      [phoneNumber]
+    );
+    const association = await pool.query(
+      "INSERT INTO school_parents (school_id, parent_id, status) VALUES ($1, $2, 'pending') ON CONFLICT (school_id, parent_id) DO UPDATE SET status = CASE WHEN school_parents.status = 'revoked' THEN 'pending' ELSE school_parents.status END, invited_at = CASE WHEN school_parents.status = 'revoked' THEN now() ELSE school_parents.invited_at END RETURNING school_id, parent_id, status, invited_at, accepted_at, revoked_at",
+      [req.school_id, parent.rows[0].parent_id]
+    );
+    await pool.query("COMMIT");
+    return res.status(201).json({ invitation: association.rows[0], parent: parent.rows[0] });
+  } catch (error) {
+    await pool.query("ROLLBACK");
+    return next(error);
+  }
+});
+
+app.get("/school/parents", requireSchoolAuth, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      "SELECT p.parent_id, p.phone_number, p.phone_verified_at, p.status AS parent_status, p.created_at, sp.status AS association_status, sp.invited_at, sp.accepted_at, sp.revoked_at FROM school_parents sp INNER JOIN parents p ON p.parent_id = sp.parent_id WHERE sp.school_id = $1 ORDER BY sp.invited_at DESC",
+      [req.school_id]
+    );
+    return res.status(200).json({ parents: result.rows });
+  } catch (error) { return next(error); }
+});
+
+app.patch("/school/parents/:parent_id/revoke", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "parent_id")) return;
+  try {
+    const result = await pool.query("UPDATE school_parents SET status = 'revoked', revoked_at = now() WHERE school_id = $1 AND parent_id = $2 RETURNING school_id, parent_id, status, invited_at, accepted_at, revoked_at", [req.school_id, req.params.parent_id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: "School-parent association not found" });
+    return res.status(200).json({ association: result.rows[0] });
+  } catch (error) { return next(error); }
+});
+
+app.get("/parents/me/school-invitations", requireParentAuth, async (req, res, next) => {
+  try {
+    const result = await pool.query("SELECT sp.school_id, s.school_name, sp.status, sp.invited_at, sp.accepted_at FROM school_parents sp INNER JOIN schools s ON s.school_id = sp.school_id WHERE sp.parent_id = $1 AND sp.status = 'pending' ORDER BY sp.invited_at DESC", [req.parent_id]);
+    return res.status(200).json({ invitations: result.rows });
+  } catch (error) { return next(error); }
+});
+
+app.patch("/parents/me/school-invitations/:school_id", requireParentAuth, requireJsonBody, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "school_id")) return;
+  if (req.body.status !== "active" && req.body.status !== "declined") return res.status(400).json({ message: "status must be active or declined" });
+  try {
+    const result = await pool.query("UPDATE school_parents SET status = $1, accepted_at = CASE WHEN $1 = 'active' THEN now() ELSE accepted_at END WHERE school_id = $2 AND parent_id = $3 AND status = 'pending' RETURNING school_id, parent_id, status, invited_at, accepted_at, revoked_at", [req.body.status, req.params.school_id, req.parent_id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: "Invitation not found" });
+    return res.status(200).json({ association: result.rows[0] });
+  } catch (error) { return next(error); }
+});
 
 app.post("/parents", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
   const { phone_number } = req.body;
@@ -1457,7 +1532,7 @@ app.get("/parents", requireSchoolAuth, async (req, res, next) => {
   try {
     // Fetch school-linked parents
     const result = await pool.query(
-      "SELECT DISTINCT p.parent_id, p.phone_number, p.phone_verified_at, p.status, p.created_at FROM parents p INNER JOIN student_parents sp ON p.parent_id = sp.parent_id INNER JOIN students s ON sp.student_id = s.student_id INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE c.school_id = $1 ORDER BY p.created_at DESC",
+      "SELECT p.parent_id, p.phone_number, p.phone_verified_at, p.status, p.created_at, sp.status AS association_status, sp.invited_at, sp.accepted_at, sp.revoked_at FROM parents p INNER JOIN school_parents sp ON p.parent_id = sp.parent_id WHERE sp.school_id = $1 ORDER BY sp.invited_at DESC",
       [req.school_id]
     );
 
@@ -1515,9 +1590,9 @@ app.post(
         });
       }
 
-      // Link only parents already associated with this school.
+      // Link only parents with an active school association.
       const result = await pool.query(
-        "INSERT INTO student_parents (student_id, parent_id, relationship, status) SELECT $1, p.parent_id, $3, 'pending' FROM parents p WHERE p.parent_id = $2 AND EXISTS (SELECT 1 FROM student_parents sp INNER JOIN students s ON sp.student_id = s.student_id INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE sp.parent_id = p.parent_id AND c.school_id = $4) RETURNING student_id, parent_id, relationship, status, created_at",
+        "INSERT INTO student_parents (student_id, parent_id, relationship, status) SELECT $1, p.parent_id, $3, 'pending' FROM parents p INNER JOIN school_parents shp ON shp.parent_id = p.parent_id AND shp.school_id = $4 AND shp.status = 'active' WHERE p.parent_id = $2 RETURNING student_id, parent_id, relationship, status, created_at",
         [
           req.params.student_id,
           Number(parent_id),
@@ -1570,7 +1645,7 @@ app.get(
 
       // Fetch linked parents
       const result = await pool.query(
-        "SELECT p.parent_id, p.phone_number, p.phone_verified_at, p.status, p.created_at, sp.relationship, sp.status AS link_status, sp.created_at AS linked_at FROM parents p INNER JOIN student_parents sp ON p.parent_id = sp.parent_id WHERE sp.student_id = $1 ORDER BY sp.created_at DESC",
+        "SELECT p.parent_id, p.phone_number, p.phone_verified_at, p.status, p.created_at, sp.relationship, sp.status AS link_status, sp.parent_accepted_at, sp.school_confirmed_at, shp.status AS association_status, sp.created_at AS linked_at FROM parents p INNER JOIN student_parents sp ON p.parent_id = sp.parent_id INNER JOIN students s ON s.student_id = sp.student_id INNER JOIN classrooms c ON c.classroom_id = s.classroom_id INNER JOIN school_parents shp ON shp.parent_id = p.parent_id AND shp.school_id = c.school_id WHERE sp.student_id = $1 ORDER BY sp.created_at DESC",
         [req.params.student_id]
       );
 
@@ -1582,6 +1657,16 @@ app.get(
     }
   }
 );
+
+app.patch("/parents/me/students/:student_id/accept", requireParentAuth, requireJsonBody, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "student_id")) return;
+  if (req.body.accepted !== true && req.body.accepted !== false) return res.status(400).json({ message: "accepted must be a boolean" });
+  try {
+    const result = await pool.query("UPDATE student_parents sp SET parent_accepted_at = CASE WHEN $1 THEN now() ELSE NULL END, status = CASE WHEN $1 AND school_confirmed_at IS NOT NULL THEN 'verified' WHEN $1 THEN 'pending' ELSE 'pending' END FROM students s INNER JOIN classrooms c ON c.classroom_id = s.classroom_id INNER JOIN school_parents shp ON shp.school_id = c.school_id AND shp.parent_id = sp.parent_id AND shp.status = 'active' WHERE sp.student_id = $2 AND sp.parent_id = $3 AND sp.status = 'pending' RETURNING sp.student_id, sp.parent_id, sp.relationship, sp.status, sp.created_at", [req.body.accepted, req.params.student_id, req.parent_id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: "Student link not found" });
+    return res.status(200).json({ student_parent: result.rows[0] });
+  } catch (error) { return next(error); }
+});
 
 app.patch(
   "/students/:student_id/parents/:parent_id",
@@ -1601,9 +1686,15 @@ app.patch(
     }
 
     try {
+      // School confirmation is allowed only after parent acceptance.
+      if (status === "verified") {
+        const accepted = await pool.query("SELECT sp.parent_accepted_at FROM student_parents sp INNER JOIN students s ON s.student_id = sp.student_id INNER JOIN classrooms c ON c.classroom_id = s.classroom_id INNER JOIN school_parents shp ON shp.school_id = c.school_id AND shp.parent_id = sp.parent_id AND shp.status = 'active' WHERE sp.student_id = $1 AND sp.parent_id = $2 AND c.school_id = $3", [Number(req.params.student_id), Number(req.params.parent_id), req.school_id]);
+        if (accepted.rows.length === 0) return res.status(404).json({ message: "Student-parent link not found" });
+        if (!accepted.rows[0].parent_accepted_at) return res.status(409).json({ message: "Parent must accept the student link first" });
+      }
       // Update only links for students owned by this school
       const result = await pool.query(
-        "UPDATE student_parents sp SET status = $1 FROM students s INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE sp.student_id = s.student_id AND sp.student_id = $2 AND sp.parent_id = $3 AND c.school_id = $4 RETURNING sp.student_id, sp.parent_id, sp.relationship, sp.status, sp.created_at",
+        "UPDATE student_parents sp SET status = $1, school_confirmed_at = CASE WHEN $1 = 'verified' THEN now() ELSE NULL END FROM students s INNER JOIN classrooms c ON s.classroom_id = c.classroom_id INNER JOIN school_parents shp ON shp.school_id = c.school_id AND shp.parent_id = sp.parent_id AND shp.status = 'active' WHERE sp.student_id = s.student_id AND sp.student_id = $2 AND sp.parent_id = $3 AND c.school_id = $4 RETURNING sp.student_id, sp.parent_id, sp.relationship, sp.status, sp.created_at",
         [
           status,
           Number(req.params.student_id),
@@ -2206,7 +2297,7 @@ app.get(
 
         // Verify verified parent-student link
         const linkResult = await pool.query(
-          "SELECT student_id FROM student_parents WHERE student_id = $1 AND parent_id = $2 AND status = 'verified'",
+          "SELECT sp.student_id FROM student_parents sp INNER JOIN students s ON s.student_id = sp.student_id INNER JOIN classrooms c ON c.classroom_id = s.classroom_id INNER JOIN school_parents shp ON shp.school_id = c.school_id AND shp.parent_id = sp.parent_id AND shp.status = 'active' WHERE sp.student_id = $1 AND sp.parent_id = $2 AND sp.status = 'verified'",
           [Number(req.params.student_id), Number(req.parent_id)]
         );
 

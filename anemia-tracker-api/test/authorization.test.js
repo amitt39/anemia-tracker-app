@@ -313,6 +313,39 @@ test("school profile returns 404 for a nonexistent authenticated school", { skip
   assert.deepEqual(response.body, { message: "School not found" });
 });
 
+test("school-parent migration preserves verified and pending link semantics", { skip: skipReason }, async () => {
+  const association = await pool.query("SELECT status FROM school_parents WHERE school_id = $1 AND parent_id = $2", [fixtures.schoolA.school_id, fixtures.parents[0]]);
+  assert.equal(association.rows.length, 1);
+  assert.equal(association.rows[0].status, "active");
+  const pending = await pool.query("SELECT status FROM student_parents WHERE student_id = $1 AND parent_id = $2", [fixtures.students[0], fixtures.parents[0]]);
+  assert.equal(pending.rows[0].status, "verified");
+});
+
+test("school parent invitation is isolated and duplicate-safe", { skip: skipReason }, async () => {
+  const response = await request("/school/parents/invitations", {
+    method: "POST",
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+    body: JSON.stringify({ phone_number: `+1999${Date.now()}` }),
+  });
+  assert.equal(response.status, 201);
+  fixtures.parents.push(response.body.parent.parent_id);
+  const duplicate = await request("/school/parents/invitations", {
+    method: "POST",
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+    body: JSON.stringify({ phone_number: response.body.parent.phone_number }),
+  });
+  assert.equal(duplicate.status, 201);
+  assert.equal(duplicate.body.invitation.parent_id, response.body.invitation.parent_id);
+});
+
+test("parent school invitation routes require the authenticated parent", { skip: skipReason }, async () => {
+  const response = await request("/parents/me/school-invitations", {
+    headers: authHeader({ role: "parent", parent_id: fixtures.parents[0] }),
+  });
+  assert.equal(response.status, 200);
+  assert.ok(Array.isArray(response.body.invitations));
+});
+
 test("teacher creation rejects missing required fields", { skip: skipReason }, async () => {
   const response = await request("/teachers", {
     method: "POST",
