@@ -75,10 +75,16 @@ async function createFixtures() {
   trackedFixtures.schools.push(schoolB.school_id);
 
   const teacherA = await insertRow(
-    "INSERT INTO teachers (school_id, first_name, last_name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING teacher_id",
+    "INSERT INTO teachers (school_id, first_name, last_name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING teacher_id, email",
     [schoolA.school_id, "Test", "Teacher", `teacher-a-${suffix}@example.test`, "hash"]
   );
   trackedFixtures.teacherA = teacherA;
+
+  const teacherB = await insertRow(
+    "INSERT INTO teachers (school_id, first_name, last_name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING teacher_id, email",
+    [schoolB.school_id, "Other", "Teacher", `teacher-b-${suffix}@example.test`, "hash"]
+  );
+  trackedFixtures.teacherB = teacherB;
 
   const classroomA = await insertRow(
     "INSERT INTO classrooms (school_id, teacher_id, class_name) VALUES ($1, $2, $3) RETURNING classroom_id",
@@ -217,6 +223,11 @@ async function cleanupFixtures() {
       fixtures.teacherA.teacher_id,
     ]);
   }
+  if (fixtures.teacherB) {
+    await pool.query("DELETE FROM teachers WHERE teacher_id = $1", [
+      fixtures.teacherB.teacher_id,
+    ]);
+  }
   if (fixtures.schools.length > 0) {
     await pool.query("DELETE FROM schools WHERE school_id = ANY($1::int[])", [
       fixtures.schools,
@@ -250,6 +261,110 @@ after(async () => {
   if (pool) {
     await pool.end();
   }
+});
+
+test(
+  "school can access its own profile without exposing password hash",
+  { skip: skipReason },
+  async () => {
+    const response = await request("/schools/me", {
+      headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.school.school_id, fixtures.schoolA.school_id);
+    assert.equal(response.body.school.school_name.startsWith("Test School A"), true);
+    assert.equal(Object.hasOwn(response.body.school, "password_hash"), false);
+  }
+);
+
+test("school profile rejects missing authentication", { skip: skipReason }, async () => {
+  const response = await request("/schools/me");
+  assert.equal(response.status, 401);
+});
+
+test("school profile rejects invalid and expired tokens", { skip: skipReason }, async () => {
+  const invalid = await request("/schools/me", { headers: { Authorization: "Bearer invalid" } });
+  assert.equal(invalid.status, 401);
+
+  const expired = await request("/schools/me", {
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id, exp: 1 }),
+  });
+  assert.equal(expired.status, 401);
+});
+
+test("school profile rejects teacher and parent tokens", { skip: skipReason }, async () => {
+  const teacher = await request("/schools/me", {
+    headers: authHeader({ role: "teacher", school_id: fixtures.schoolA.school_id, teacher_id: fixtures.teacherA.teacher_id }),
+  });
+  const parent = await request("/schools/me", {
+    headers: authHeader({ role: "parent", parent_id: fixtures.parents[0] }),
+  });
+  assert.equal(teacher.status, 401);
+  assert.equal(parent.status, 401);
+});
+
+test("school profile returns 404 for a nonexistent authenticated school", { skip: skipReason }, async () => {
+  const response = await request("/schools/me", {
+    headers: authHeader({ role: "school", school_id: 2147483647 }),
+  });
+  assert.equal(response.status, 404);
+  assert.deepEqual(response.body, { message: "School not found" });
+});
+
+test("teacher creation rejects missing required fields", { skip: skipReason }, async () => {
+  const response = await request("/teachers", {
+    method: "POST",
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+    body: JSON.stringify({ first_name: "Only" }),
+  });
+  assert.equal(response.status, 400);
+});
+
+test("teacher creation rejects duplicate email within a school", { skip: skipReason }, async () => {
+  const response = await request("/teachers", {
+    method: "POST",
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+    body: JSON.stringify({
+      first_name: "Duplicate",
+      last_name: "Teacher",
+      email: fixtures.teacherA.email,
+      password: "Teacher123",
+    }),
+  });
+  assert.equal(response.status, 409);
+});
+
+test("teacher list and detail are isolated by school", { skip: skipReason }, async () => {
+  const list = await request("/teachers", {
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+  });
+  assert.equal(list.status, 200);
+  assert.equal(list.body.teachers.some((teacher) => teacher.teacher_id === fixtures.teacherB.teacher_id), false);
+
+  const detail = await request(`/teachers/${fixtures.teacherB.teacher_id}`, {
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+  });
+  assert.equal(detail.status, 404);
+});
+
+test("teacher edit is isolated by school", { skip: skipReason }, async () => {
+  const response = await request(`/teachers/${fixtures.teacherB.teacher_id}`, {
+    method: "PATCH",
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+    body: JSON.stringify({ first_name: "Blocked" }),
+  });
+  assert.equal(response.status, 404);
+});
+
+test("classroom assignment rejects a teacher from another school", { skip: skipReason }, async () => {
+  const response = await request(`/classrooms/${fixtures.classrooms[0]}`, {
+    method: "PATCH",
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+    body: JSON.stringify({ teacher_id: fixtures.teacherB.teacher_id }),
+  });
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.body, { message: "teacher_id must belong to this school" });
 });
 
 test(

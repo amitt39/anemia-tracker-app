@@ -207,7 +207,7 @@ function requireSchoolAuth(req, res, next) {
 }
 
 function requireTeacherAuth(req, res, next) {
-  authMiddleware(req, res, () => {
+  authMiddleware(req, res, async () => {
     if (
       req.auth_role !== "teacher" ||
       !Number.isInteger(Number(req.school_id)) ||
@@ -220,7 +220,18 @@ function requireTeacherAuth(req, res, next) {
       });
     }
 
-    next();
+    try {
+      const result = await pool.query(
+        "SELECT is_active FROM teachers WHERE teacher_id = $1 AND school_id = $2",
+        [req.teacher_id, req.school_id]
+      );
+      if (result.rows.length === 0 || !result.rows[0].is_active) {
+        return res.status(401).json({ message: "Teacher account is inactive" });
+      }
+      next();
+    } catch (error) {
+      next(error);
+    }
   });
 }
 
@@ -263,8 +274,30 @@ app.get("/api/protected", requireSchoolAuth, (req, res) => {
   });
 });
 
+app.get("/schools/me", requireSchoolAuth, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      "SELECT school_id, school_name, email, created_at FROM schools WHERE school_id = $1",
+      [req.school_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        message: "School not found",
+      });
+    }
+
+    return res.status(200).json({
+      school: result.rows[0],
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.post("/schools", requireJsonBody, async (req, res, next) => {
   const { school_name, email, password } = req.body;
+  const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
 
   // Validate required fields
   if (
@@ -272,7 +305,7 @@ app.post("/schools", requireJsonBody, async (req, res, next) => {
     typeof email !== "string" ||
     typeof password !== "string" ||
     school_name.trim() === "" ||
-    email.trim() === "" ||
+    normalizedEmail === "" ||
     password.trim() === ""
   ) {
     return res.status(400).json({
@@ -287,18 +320,39 @@ app.post("/schools", requireJsonBody, async (req, res, next) => {
     return;
   }
 
+  if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
+    return res.status(400).json({
+      message: "Please provide a valid email address",
+    });
+  }
+
+  if (password.length < 8) {
+    return res.status(400).json({
+      message: "Password must be at least 8 characters",
+    });
+  }
+
   try {
     // Hash password
     const passwordHash = await bcrypt.hash(password, 10);
 
     // Create school
-    await pool.query(
-      "INSERT INTO schools (school_name, email, password_hash) VALUES ($1, $2, $3)",
-      [school_name.trim(), email.trim(), passwordHash]
+    const result = await pool.query(
+      "INSERT INTO schools (school_name, email, password_hash) VALUES ($1, $2, $3) RETURNING school_id",
+      [school_name.trim(), normalizedEmail, passwordHash]
+    );
+
+    const schoolId = result.rows[0].school_id;
+    const token = jwt.sign(
+      { school_id: schoolId, role: "school" },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
     );
 
     return res.status(201).json({
-      message: "School created successfully",
+      message: "School account created successfully",
+      token,
+      school_id: schoolId,
     });
   } catch (error) {
     // Handle duplicate email
@@ -314,12 +368,13 @@ app.post("/schools", requireJsonBody, async (req, res, next) => {
 
 app.post("/schools/login", schoolLoginLimiter, requireJsonBody, async (req, res, next) => {
   const { email, password } = req.body;
+  const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
 
   // Validate credentials
   if (
     typeof email !== "string" ||
     typeof password !== "string" ||
-    email.trim() === "" ||
+    normalizedEmail === "" ||
     password.trim() === ""
   ) {
     return res.status(400).json({
@@ -331,7 +386,7 @@ app.post("/schools/login", schoolLoginLimiter, requireJsonBody, async (req, res,
     // Find school
     const result = await pool.query(
       "SELECT school_id, password_hash FROM schools WHERE email = $1",
-      [email.trim()]
+      [normalizedEmail]
     );
 
     if (result.rows.length === 0) {
@@ -393,7 +448,7 @@ app.post("/teachers/login", teacherLoginLimiter, requireJsonBody, async (req, re
   try {
     // Find teacher
     const result = await pool.query(
-      "SELECT teacher_id, school_id, password_hash FROM teachers WHERE school_id = $1 AND email = $2",
+      "SELECT teacher_id, school_id, password_hash FROM teachers WHERE school_id = $1 AND email = $2 AND is_active = TRUE",
       [Number(school_id), email.trim()]
     );
 
@@ -440,6 +495,7 @@ app.post("/teachers/login", teacherLoginLimiter, requireJsonBody, async (req, re
 
 app.post("/teachers", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
   const { first_name, last_name, email, password } = req.body;
+  const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
 
   // Validate required fields
   if (
@@ -449,7 +505,7 @@ app.post("/teachers", requireSchoolAuth, requireJsonBody, async (req, res, next)
     typeof password !== "string" ||
     first_name.trim() === "" ||
     last_name.trim() === "" ||
-    email.trim() === "" ||
+    normalizedEmail === "" ||
     password.trim() === ""
   ) {
     return res.status(400).json({
@@ -471,12 +527,12 @@ app.post("/teachers", requireSchoolAuth, requireJsonBody, async (req, res, next)
 
     // Create teacher
     await pool.query(
-      "INSERT INTO teachers (school_id, first_name, last_name, email, password_hash) VALUES ($1, $2, $3, $4, $5)",
+      "INSERT INTO teachers (school_id, first_name, last_name, email, password_hash, is_active) VALUES ($1, $2, $3, $4, $5, TRUE)",
       [
         req.school_id,
         first_name.trim(),
         last_name.trim(),
-        email.trim(),
+        normalizedEmail,
         passwordHash,
       ]
     );
@@ -500,7 +556,7 @@ app.get("/teachers", requireSchoolAuth, async (req, res, next) => {
   try {
     // Fetch school teachers
     const result = await pool.query(
-      "SELECT teacher_id, first_name, last_name, email, created_at FROM teachers WHERE school_id = $1 ORDER BY created_at DESC",
+      "SELECT teacher_id, first_name, last_name, email, is_active, created_at FROM teachers WHERE school_id = $1 ORDER BY created_at DESC",
       [req.school_id]
     );
 
@@ -519,7 +575,7 @@ app.get("/teachers/:teacher_id", requireSchoolAuth, async (req, res, next) => {
   try {
     // Fetch teacher
     const result = await pool.query(
-      "SELECT teacher_id, first_name, last_name, email, created_at FROM teachers WHERE teacher_id = $1 AND school_id = $2",
+      "SELECT teacher_id, first_name, last_name, email, is_active, created_at FROM teachers WHERE teacher_id = $1 AND school_id = $2",
       [req.params.teacher_id, req.school_id]
     );
 
@@ -559,7 +615,7 @@ app.patch("/teachers/:teacher_id", requireSchoolAuth, requireJsonBody, async (re
       const maxLength = field === "email" ? 255 : 50;
       if (!requireMaxStringLength(res, field, value, maxLength)) return;
 
-      values.push(value.trim());
+      values.push(field === "email" ? value.trim().toLowerCase() : value.trim());
       updates.push(`${field} = $${values.length}`);
     }
   }
@@ -576,7 +632,7 @@ app.patch("/teachers/:teacher_id", requireSchoolAuth, requireJsonBody, async (re
     const result = await pool.query(
       `UPDATE teachers SET ${updates.join(", ")} WHERE teacher_id = $${
         values.length - 1
-      } AND school_id = $${values.length} RETURNING teacher_id, first_name, last_name, email, created_at`,
+      } AND school_id = $${values.length} RETURNING teacher_id, first_name, last_name, email, is_active, created_at`,
       values
     );
 
@@ -599,6 +655,23 @@ app.patch("/teachers/:teacher_id", requireSchoolAuth, requireJsonBody, async (re
       });
     }
 
+    return next(error);
+  }
+});
+
+app.patch("/teachers/:teacher_id/status", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
+  if (!requirePositiveIntegerParam(req, res, "teacher_id")) return;
+  if (typeof req.body.is_active !== "boolean") {
+    return res.status(400).json({ message: "is_active must be a boolean" });
+  }
+  try {
+    const result = await pool.query(
+      "UPDATE teachers SET is_active = $1 WHERE teacher_id = $2 AND school_id = $3 RETURNING teacher_id, first_name, last_name, email, is_active, created_at",
+      [req.body.is_active, req.params.teacher_id, req.school_id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ message: "Teacher not found" });
+    return res.status(200).json({ teacher: result.rows[0] });
+  } catch (error) {
     return next(error);
   }
 });
