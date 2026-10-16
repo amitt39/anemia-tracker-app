@@ -1037,6 +1037,19 @@ app.patch("/students/:student_id", requireSchoolAuth, requireJsonBody, async (re
   const updates = [];
   const values = [];
 
+  if (Object.prototype.hasOwnProperty.call(req.body, "classroom_id")) {
+    if (!Number.isInteger(Number(req.body.classroom_id)) || Number(req.body.classroom_id) <= 0) {
+      return res.status(400).json({ message: "classroom_id must be a positive integer" });
+    }
+    const classroomResult = await pool.query(
+      "SELECT classroom_id FROM classrooms WHERE classroom_id = $1 AND school_id = $2",
+      [Number(req.body.classroom_id), req.school_id]
+    );
+    if (classroomResult.rows.length === 0) return res.status(404).json({ message: "Classroom not found" });
+    values.push(Number(req.body.classroom_id));
+    updates.push(`classroom_id = $${values.length}`);
+  }
+
   // Validate update fields
   if (Object.prototype.hasOwnProperty.call(req.body, "roll_number")) {
     const { roll_number } = req.body;

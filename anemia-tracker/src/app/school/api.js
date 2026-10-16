@@ -42,6 +42,13 @@ export function getClassrooms(token) { return request('/classrooms', { headers: 
 export function getClassroom(token, classroomId) { return request(`/classrooms/${classroomId}`, { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function getClassroomStudents(token, classroomId) { return request(`/classrooms/${classroomId}/students`, { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function getStudents(token) { return request('/students', { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getStudent(token, studentId) { return request(`/students/${studentId}`, { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function updateStudent(token, studentId, data) { return request(`/students/${studentId}`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
+export function createParent(token, phoneNumber) { return request('/parents', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ phone_number: phoneNumber }) }, true); }
+export function getParents(token) { return request('/parents', { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getStudentParents(token, studentId) { return request(`/students/${studentId}/parents`, { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function linkStudentParent(token, studentId, parentId, relationship) { return request(`/students/${studentId}/parents`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ parent_id: parentId, relationship }) }, true); }
+export function updateStudentParentStatus(token, studentId, parentId, status) { return request(`/students/${studentId}/parents/${parentId}`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ status }) }, true); }
 export function createTeacher(token, data) { return request('/teachers', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
 export function updateTeacher(token, teacherId, data) { return request(`/teachers/${teacherId}`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
 export function updateTeacherStatus(token, teacherId, isActive) { return request(`/teachers/${teacherId}/status`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ is_active: isActive }) }, true); }
