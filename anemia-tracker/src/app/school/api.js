@@ -2,6 +2,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_BASE_URL = 'http://172.30.216.30:3000';
 
+export function validateIndianMobileNumber(input) {
+  if (typeof input !== 'string' || input.trim() === '') return { valid: false, reason: 'required', normalized: '' };
+  const value = input.trim();
+  if (!/^[0-9+().\-\s]+$/.test(value) || /[+]/.test(value.slice(1)) || /^[.\-]|[.\-]$/.test(value) || /[+][().\-]|[().\-]\s*[+]/.test(value) || /[().\-]{2,}/.test(value)) return { valid: false, reason: 'format', normalized: '' };
+  const compact = value.replace(/[\s().-]/g, '');
+  let national = compact;
+  if (compact.startsWith('+91')) national = compact.slice(3);
+  else if (compact.startsWith('+')) return { valid: false, reason: 'country_code', normalized: '' };
+  else if (compact.length === 12 && compact.startsWith('91')) return { valid: false, reason: 'country_code', normalized: '' };
+  if (national.length !== 10) return { valid: false, reason: 'incomplete', normalized: '' };
+  if (!/^\d+$/.test(national)) return { valid: false, reason: 'format', normalized: '' };
+  if (!/^[6-9]/.test(national)) return { valid: false, reason: 'prefix', normalized: '' };
+  return { valid: true, reason: '', normalized: `+91${national}` };
+}
+
 async function request(path, options = {}, isProtected = false) {
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {

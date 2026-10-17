@@ -10,11 +10,22 @@ const {
   createOtpRequestSuccessResponse,
   getOtpCooldownState,
   isMockOtpSmsProviderEnabled,
+  isValidPhoneNumber,
+  validateIndianMobileNumber,
   isOtpSmsDeliveryConfigured,
   normalizePhoneNumber,
   recordOtpRequestCooldown,
   sendOtpSms,
 } = require("./otp");
+
+function phoneValidationMessage(phoneNumber) {
+  const result = validateIndianMobileNumber(phoneNumber);
+  if (result.reason === "required") return "Phone number is required.";
+  if (result.reason === "incomplete") return "Enter a complete 10-digit Indian mobile number.";
+  if (result.reason === "prefix") return "Indian mobile numbers must start with 6, 7, 8, or 9.";
+  if (result.reason === "country_code") return "Use a valid Indian number with the +91 country code.";
+  return "Enter a valid Indian mobile number.";
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1209,6 +1220,9 @@ app.post("/parents/login/request-otp", otpRequestLimiter, requireJsonBody, async
   }
 
   const phoneNumber = normalizePhoneNumber(phone_number);
+  if (!isValidPhoneNumber(phone_number)) {
+    return res.status(400).json({ message: phoneValidationMessage(phone_number) });
+  }
 
   if (!isOtpSmsDeliveryConfigured()) {
     return res.status(503).json({
@@ -1271,7 +1285,10 @@ app.post("/parents/login/verify-otp", otpVerifyLimiter, requireJsonBody, async (
     });
   }
 
-  const phoneNumber = phone_number.trim();
+  const phoneNumber = normalizePhoneNumber(phone_number);
+  if (!isValidPhoneNumber(phone_number)) {
+    return res.status(400).json({ message: phoneValidationMessage(phone_number) });
+  }
   const otpState = parentOtpStore.get(phoneNumber);
 
   if (!otpState) {
@@ -1439,7 +1456,8 @@ app.get(
 
 app.post("/school/parents/invitations", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
   const phoneNumber = typeof req.body.phone_number === "string" ? normalizePhoneNumber(req.body.phone_number) : "";
-  if (!phoneNumber) return res.status(400).json({ message: "phone_number is required" });
+  if (!phoneNumber) return res.status(400).json({ message: "Phone number is required." });
+  if (!isValidPhoneNumber(phoneNumber)) return res.status(400).json({ message: phoneValidationMessage(phoneNumber) });
   try {
     await pool.query("BEGIN");
     const parent = await pool.query(

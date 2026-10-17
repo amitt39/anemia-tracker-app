@@ -4,6 +4,25 @@ const { after, before, beforeEach, test } = require("node:test");
 
 const otpHelpers = require("../otp");
 
+test("phone validation accepts supported numbers and rejects malformed input", () => {
+  assert.equal(otpHelpers.isValidPhoneNumber("9876543210"), true);
+  assert.equal(otpHelpers.isValidPhoneNumber("+91 98765-43210"), true);
+  assert.equal(otpHelpers.normalizePhoneNumber("98765 43210"), "+919876543210");
+  assert.equal(otpHelpers.normalizePhoneNumber("+91 98765-43210"), "+919876543210");
+  assert.equal(otpHelpers.isValidPhoneNumber("1412345678"), false);
+  assert.equal(otpHelpers.isValidPhoneNumber("5123456789"), false);
+  assert.equal(otpHelpers.isValidPhoneNumber("fdsfs"), false);
+  assert.equal(otpHelpers.isValidPhoneNumber("1234567"), false);
+  assert.equal(otpHelpers.isValidPhoneNumber("1234567890123456"), false);
+  assert.equal(otpHelpers.isValidPhoneNumber("+92 9876543210"), false);
+  assert.equal(otpHelpers.isValidPhoneNumber("91+9876543210"), false);
+  for (const value of ["", "   ", "9", "98", "987654", "09876543210", "987654321", "98765432101", "+91", "+91987654321", "+9198765432101", "++919876543210", "+91+9876543210", "98765abc10", "98765 43210 ext 2", "１２３４５６７８９０"]) {
+    assert.equal(otpHelpers.isValidPhoneNumber(value), false, value);
+  }
+  assert.equal(otpHelpers.isValidPhoneNumber("(98765) 43210"), true);
+  assert.equal(otpHelpers.isValidPhoneNumber("98765.43210"), true);
+});
+
 const originalEnv = {
   ALLOW_DEV_OTP: process.env.ALLOW_DEV_OTP,
   DATABASE_URL: process.env.DATABASE_URL,
@@ -117,14 +136,14 @@ test("mock provider is available only outside production and does not store OTP 
   assert.equal(otpHelpers.isMockOtpSmsProviderEnabled(), true);
   assert.equal(otpHelpers.isOtpSmsDeliveryConfigured(), true);
 
-  await otpHelpers.sendOtpSms(" +911234567890 ", "123456");
+  await otpHelpers.sendOtpSms(" +919876543210 ", "123456");
 
   assert.equal(otpHelpers.mockOtpDeliveries.length, 1);
   assert.deepEqual(Object.keys(otpHelpers.mockOtpDeliveries[0]), [
     "phone_number",
     "sent_at",
   ]);
-  assert.equal(otpHelpers.mockOtpDeliveries[0].phone_number, "+911234567890");
+  assert.equal(otpHelpers.mockOtpDeliveries[0].phone_number, "+919876543210");
 });
 
 test("mock provider is rejected in production", async () => {
@@ -134,7 +153,7 @@ test("mock provider is rejected in production", async () => {
   assert.equal(otpHelpers.isOtpSmsDeliveryConfigured(), false);
 
   await assert.rejects(
-    () => otpHelpers.sendOtpSms("+911234567890", "123456"),
+    () => otpHelpers.sendOtpSms("+919876543210", "123456"),
     {
       code: "OTP_DELIVERY_NOT_CONFIGURED",
     },
@@ -165,20 +184,20 @@ test("development OTP response gate is explicit and disabled in production", () 
 test("cooldown is keyed by normalized phone number and expired entries are pruned", () => {
   const now = 1000;
 
-  assert.deepEqual(otpHelpers.getOtpCooldownState(" +911234567890 ", now), {
+  assert.deepEqual(otpHelpers.getOtpCooldownState(" +919876543210 ", now), {
     allowed: true,
     retryAfterSeconds: 0,
   });
 
-  otpHelpers.recordOtpRequestCooldown(" +911234567890 ", now);
+  otpHelpers.recordOtpRequestCooldown(" +919876543210 ", now);
   otpHelpers.recordOtpRequestCooldown("+919999999999", now);
 
-  assert.deepEqual(otpHelpers.getOtpCooldownState("+911234567890", now + 1), {
+  assert.deepEqual(otpHelpers.getOtpCooldownState("+919876543210", now + 1), {
     allowed: false,
     retryAfterSeconds: 60,
   });
   assert.equal(otpHelpers.parentOtpResendStore.size, 2);
-  assert.deepEqual(otpHelpers.getOtpCooldownState("+911234567890", now + 60000), {
+  assert.deepEqual(otpHelpers.getOtpCooldownState("+919876543210", now + 60000), {
     allowed: true,
     retryAfterSeconds: 0,
   });
@@ -189,14 +208,14 @@ test("mock delivery history is bounded", async () => {
   process.env.OTP_SMS_PROVIDER = "mock";
 
   for (let index = 0; index < otpHelpers.MOCK_OTP_DELIVERY_HISTORY_LIMIT + 5; index += 1) {
-    await otpHelpers.sendOtpSms(`+9112345678${String(index).padStart(2, "0")}`, "123456");
+    await otpHelpers.sendOtpSms(`+9198765432${String(index).padStart(2, "0")}`, "123456");
   }
 
   assert.equal(
     otpHelpers.mockOtpDeliveries.length,
     otpHelpers.MOCK_OTP_DELIVERY_HISTORY_LIMIT,
   );
-  assert.equal(otpHelpers.mockOtpDeliveries[0].phone_number, "+911234567805");
+  assert.equal(otpHelpers.mockOtpDeliveries[0].phone_number, "+919876543205");
 });
 
 test("production OTP requests fail with 503 and do not query the database", async () => {
@@ -210,7 +229,7 @@ test("production OTP requests fail with 503 and do not query the database", asyn
   });
 
   const response = await request("/parents/login/request-otp", {
-    phone_number: "+911234560001",
+    phone_number: "+919876540001",
   });
 
   assert.equal(response.status, 503);
@@ -225,7 +244,7 @@ test("eligible mock OTP request does not disclose OTP without development gate",
   stubActiveParent();
 
   const response = await request("/parents/login/request-otp", {
-    phone_number: "+911234560002",
+    phone_number: "+919876540002",
   });
 
   assert.equal(response.status, 200);
@@ -238,7 +257,7 @@ test("eligible development OTP request discloses OTP only with explicit gate", a
   stubActiveParent();
 
   const response = await request("/parents/login/request-otp", {
-    phone_number: "+911234560003",
+    phone_number: "+919876540003",
   });
 
   assert.equal(response.status, 200);
@@ -254,13 +273,13 @@ test("expired OTPs are rejected by the verification route", async () => {
 
   try {
     const otpResponse = await request("/parents/login/request-otp", {
-      phone_number: "+911234560004",
+      phone_number: "+919876540004",
     });
 
     Date.now = () => 1000 + 5 * 60 * 1000 + 1;
 
     const verifyResponse = await request("/parents/login/verify-otp", {
-      phone_number: "+911234560004",
+      phone_number: "+919876540004",
       otp: otpResponse.body.otp,
     });
 
@@ -294,19 +313,19 @@ test("OTP state is deleted after five incorrect attempts", async () => {
   });
 
   const otpResponse = await request("/parents/login/request-otp", {
-    phone_number: "+911234560005",
+    phone_number: "+919876540005",
   });
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const wrongResponse = await request("/parents/login/verify-otp", {
-      phone_number: "+911234560005",
+      phone_number: "+919876540005",
       otp: "000000",
     });
     assert.equal(wrongResponse.status, 401);
   }
 
   const correctResponse = await request("/parents/login/verify-otp", {
-    phone_number: "+911234560005",
+      phone_number: "+919876540005",
     otp: otpResponse.body.otp,
   });
 

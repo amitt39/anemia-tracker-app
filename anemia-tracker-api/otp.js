@@ -12,7 +12,44 @@ function canReturnDevelopmentOtp() {
 }
 
 function normalizePhoneNumber(phoneNumber) {
-  return phoneNumber.trim();
+  const result = validateIndianMobileNumber(phoneNumber);
+  return result.normalized || (typeof phoneNumber === "string" ? phoneNumber.trim() : "");
+}
+
+function isValidPhoneNumber(phoneNumber) {
+  return validateIndianMobileNumber(phoneNumber).valid;
+}
+
+function validateIndianMobileNumber(phoneNumber) {
+  if (typeof phoneNumber !== "string" || phoneNumber.trim() === "") {
+    return { valid: false, reason: "required", normalized: "" };
+  }
+
+  const value = phoneNumber.trim();
+  if (!/^[0-9+().\-\s]+$/.test(value) || /[+]/.test(value.slice(1)) || /^[.\-]|[.\-]$/.test(value) || /[+][().\-]|[().\-]\s*[+]/.test(value) || /[().\-]{2,}/.test(value)) {
+    return { valid: false, reason: "format", normalized: "" };
+  }
+
+  const compact = value.replace(/[\s().-]/g, "");
+  let nationalNumber = compact;
+  if (compact.startsWith("+91")) {
+    nationalNumber = compact.slice(3);
+  } else if (compact.startsWith("+")) {
+    return { valid: false, reason: "country_code", normalized: "" };
+  } else if (compact.length === 12 && compact.startsWith("91")) {
+    return { valid: false, reason: "country_code", normalized: "" };
+  }
+
+  if (nationalNumber.length !== 10) {
+    return { valid: false, reason: "incomplete", normalized: "" };
+  }
+  if (!/^[0-9]+$/.test(nationalNumber)) {
+    return { valid: false, reason: "format", normalized: "" };
+  }
+  if (!/^[6-9]/.test(nationalNumber)) {
+    return { valid: false, reason: "prefix", normalized: "" };
+  }
+  return { valid: true, reason: "", normalized: `+91${nationalNumber}` };
 }
 
 function getOtpSmsProvider() {
@@ -117,6 +154,8 @@ module.exports = {
   isOtpSmsDeliveryConfigured,
   mockOtpDeliveries,
   normalizePhoneNumber,
+  isValidPhoneNumber,
+  validateIndianMobileNumber,
   parentOtpResendStore,
   pruneExpiredOtpCooldowns,
   recordOtpRequestCooldown,
