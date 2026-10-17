@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node test/otp.test.js && node test/reset-school-password.test.js && node test/authorization.test.js"
+    "test": "node test/otp.test.js && node test/email.test.js && node test/reset-school-password.test.js && node test/authorization.test.js"
   },
   "keywords": [],
   "author": "",

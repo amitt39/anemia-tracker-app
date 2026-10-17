@@ -17,6 +17,7 @@ const {
   recordOtpRequestCooldown,
   sendOtpSms,
 } = require("./otp");
+const { isEmailDeliveryConfigured, sendPasswordResetEmail } = require("./email");
 
 function phoneValidationMessage(phoneNumber) {
   const result = validateIndianMobileNumber(phoneNumber);
@@ -40,6 +41,7 @@ const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8081")
   .filter(Boolean);
 
 app.use(cors({
+  credentials: true,
   origin(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) {
       return callback(null, true);
@@ -189,6 +191,7 @@ function authMiddleware(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.school_id = decoded.school_id;
+    req.session_version = decoded.session_version;
     req.teacher_id = decoded.teacher_id;
     req.auth_role = decoded.role;
     req.parent_id = decoded.role === "parent" ? decoded.parent_id : undefined;
@@ -202,7 +205,7 @@ function authMiddleware(req, res, next) {
 
 // Authorization guards
 function requireSchoolAuth(req, res, next) {
-  authMiddleware(req, res, () => {
+  authMiddleware(req, res, async () => {
     if (
       req.auth_role !== "school" ||
       !Number.isInteger(Number(req.school_id)) ||
@@ -213,7 +216,13 @@ function requireSchoolAuth(req, res, next) {
       });
     }
 
-    next();
+    try {
+      const result = await pool.query("SELECT session_version FROM schools WHERE school_id = $1", [req.school_id]);
+      if (result.rows.length === 0 || Number(result.rows[0].session_version) !== Number(req.session_version || 0)) {
+        return res.status(401).json({ message: "Invalid or expired token" });
+      }
+      return next();
+    } catch (error) { return next(error); }
   });
 }
 
@@ -357,13 +366,13 @@ app.post("/schools", requireJsonBody, async (req, res, next) => {
 
     // Create school
     const result = await pool.query(
-      "INSERT INTO schools (school_name, email, password_hash) VALUES ($1, $2, $3) RETURNING school_id",
+      "INSERT INTO schools (school_name, email, password_hash) VALUES ($1, $2, $3) RETURNING school_id, session_version",
       [school_name.trim(), normalizedEmail, passwordHash]
     );
 
     const schoolId = result.rows[0].school_id;
     const token = jwt.sign(
-      { school_id: schoolId, role: "school" },
+      { school_id: schoolId, role: "school", session_version: result.rows[0].session_version },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -404,7 +413,7 @@ app.post("/schools/login", schoolLoginLimiter, requireJsonBody, async (req, res,
   try {
     // Find school
     const result = await pool.query(
-      "SELECT school_id, password_hash FROM schools WHERE email = $1",
+      "SELECT school_id, password_hash, session_version FROM schools WHERE email = $1",
       [normalizedEmail]
     );
 
@@ -432,6 +441,7 @@ app.post("/schools/login", schoolLoginLimiter, requireJsonBody, async (req, res,
       {
         school_id: school.school_id,
         role: "school",
+        session_version: school.session_version,
       },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
@@ -445,6 +455,82 @@ app.post("/schools/login", schoolLoginLimiter, requireJsonBody, async (req, res,
   } catch (error) {
     return next(error);
   }
+});
+
+function hashResetValue(value) {
+  return crypto.createHash("sha256").update(`${value}:${process.env.JWT_SECRET}`).digest("hex");
+}
+
+function resetOtpMessage() {
+  return "If the email is registered, a password reset code will be sent.";
+}
+
+function setResetCookie(res, token) {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  res.setHeader("Set-Cookie", `school_reset_token=${token}; HttpOnly; SameSite=Strict; Max-Age=600${secure}; Path=/schools/password-reset`);
+}
+
+function getResetCookie(req) {
+  const header = req.headers.cookie || "";
+  const match = header.match(/(?:^|;\s*)school_reset_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+app.post("/schools/password-reset/request", otpRequestLimiter, requireJsonBody, async (req, res, next) => {
+  const email = typeof req.body.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ message: "Enter a valid email address." });
+  if (!isEmailDeliveryConfigured()) return res.status(503).json({ message: "Password recovery email is currently unavailable." });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const school = await client.query("SELECT school_id FROM schools WHERE email = $1", [email]);
+    if (school.rows.length === 0) { await client.query("COMMIT"); return res.status(200).json({ message: resetOtpMessage() }); }
+    const existing = await client.query("SELECT last_sent_at FROM school_password_reset_challenges WHERE school_id = $1 AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1", [school.rows[0].school_id]);
+    if (existing.rows.length && Date.now() - new Date(existing.rows[0].last_sent_at).getTime() < 60000) { await client.query("ROLLBACK"); return res.status(429).json({ message: "A reset code was sent recently. Please try again later." }); }
+    const otp = String(crypto.randomInt(100000, 1000000));
+    await client.query("UPDATE school_password_reset_challenges SET consumed_at = now() WHERE school_id = $1 AND consumed_at IS NULL", [school.rows[0].school_id]);
+    const challenge = await client.query("INSERT INTO school_password_reset_challenges (school_id, otp_hash, expires_at, attempts_remaining) VALUES ($1, $2, now() + interval '5 minutes', 5) RETURNING challenge_id", [school.rows[0].school_id, hashResetValue(otp)]);
+    await sendPasswordResetEmail({ to: email, otp });
+    await client.query("COMMIT");
+    return res.status(200).json({ message: resetOtpMessage(), challenge_id: challenge.rows[0].challenge_id, expires_in_seconds: 300 });
+  } catch (error) { await client.query("ROLLBACK"); return next(error); } finally { client.release(); }
+});
+
+app.post("/schools/password-reset/verify", otpVerifyLimiter, requireJsonBody, async (req, res, next) => {
+  const email = typeof req.body.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  const otp = typeof req.body.otp === "string" ? req.body.otp : "";
+  if (!/^\S+@\S+\.\S+$/.test(email) || !/^\d{6}$/.test(otp)) return res.status(400).json({ message: "Email and a valid 6-digit code are required." });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query("SELECT c.challenge_id, c.school_id, c.otp_hash, c.attempts_remaining FROM school_password_reset_challenges c INNER JOIN schools s ON s.school_id = c.school_id WHERE s.email = $1 AND c.consumed_at IS NULL AND c.verified_at IS NULL AND c.expires_at > now() ORDER BY c.created_at DESC LIMIT 1 FOR UPDATE", [email]);
+    if (!result.rows.length) { await client.query("ROLLBACK"); return res.status(401).json({ message: "Invalid or expired reset code." }); }
+    const challenge = result.rows[0];
+    if (challenge.attempts_remaining <= 0) { await client.query("ROLLBACK"); return res.status(401).json({ message: "Invalid or expired reset code." }); }
+    if (hashResetValue(otp) !== challenge.otp_hash) { await client.query("UPDATE school_password_reset_challenges SET attempts_remaining = attempts_remaining - 1 WHERE challenge_id = $1 AND attempts_remaining > 0", [challenge.challenge_id]); await client.query("COMMIT"); return res.status(401).json({ message: "Invalid or expired reset code." }); }
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    await client.query("UPDATE school_password_reset_challenges SET verified_at = now(), reset_token_hash = $1, reset_expires_at = now() + interval '10 minutes' WHERE challenge_id = $2 AND consumed_at IS NULL AND verified_at IS NULL", [hashResetValue(resetToken), challenge.challenge_id]);
+    await client.query("COMMIT");
+    setResetCookie(res, resetToken);
+    return res.status(200).json({ ...(process.env.NODE_ENV === "production" ? {} : { reset_token: resetToken }), expires_in_seconds: 600 });
+  } catch (error) { await client.query("ROLLBACK"); return next(error); } finally { client.release(); }
+});
+
+app.post("/schools/password-reset/complete", requireJsonBody, async (req, res, next) => {
+  const resetToken = typeof req.body.reset_token === "string" ? req.body.reset_token : getResetCookie(req);
+  const password = typeof req.body.password === "string" ? req.body.password : "";
+  if (!resetToken || password.length < 8) return res.status(400).json({ message: "A reset token and password of at least 8 characters are required." });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const challenge = await client.query("SELECT challenge_id, school_id FROM school_password_reset_challenges WHERE reset_token_hash = $1 AND consumed_at IS NULL AND reset_expires_at > now() FOR UPDATE", [hashResetValue(resetToken)]);
+    if (!challenge.rows.length) { await client.query("ROLLBACK"); return res.status(401).json({ message: "Reset authorization is invalid or expired." }); }
+    const passwordHash = await bcrypt.hash(password, 10);
+    await client.query("UPDATE schools SET password_hash = $1, session_version = session_version + 1 WHERE school_id = $2", [passwordHash, challenge.rows[0].school_id]);
+    await client.query("UPDATE school_password_reset_challenges SET consumed_at = now() WHERE challenge_id = $1", [challenge.rows[0].challenge_id]);
+    await client.query("COMMIT");
+    return res.status(200).json({ message: "Password reset successfully." });
+  } catch (error) { await client.query("ROLLBACK"); return next(error); } finally { client.release(); }
 });
 
 app.post("/teachers/login", teacherLoginLimiter, requireJsonBody, async (req, res, next) => {
