@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TABLE students
+  ADD COLUMN IF NOT EXISTS parent_contact_unavailable BOOLEAN NOT NULL DEFAULT FALSE;
+
+COMMIT;

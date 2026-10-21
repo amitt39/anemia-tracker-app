@@ -321,6 +321,45 @@ test("school-parent migration preserves verified and pending link semantics", { 
   assert.equal(pending.rows[0].status, "verified");
 });
 
+test("student parent phone creates an immediately school-authorized link", { skip: skipReason }, async () => {
+  const phone = `+919876${String(Date.now()).slice(-6)}01`;
+  const created = await request("/students", {
+    method: "POST",
+    headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+    body: JSON.stringify({
+      classroom_id: fixtures.classrooms[0],
+      roll_number: 99,
+      first_name: "Auto",
+      last_name: "Linked",
+      parent_phone: phone,
+      relationship: "Guardian",
+    }),
+  });
+  assert.equal(created.status, 201);
+  const studentId = created.body.student.student_id;
+  const parentId = created.body.parent_contact.parent_id;
+  try {
+    const link = await pool.query("SELECT status FROM student_parents WHERE student_id = $1 AND parent_id = $2", [studentId, parentId]);
+    const schoolLink = await pool.query("SELECT status FROM school_parents WHERE school_id = $1 AND parent_id = $2", [fixtures.schoolA.school_id, parentId]);
+    assert.equal(link.rows[0].status, "verified");
+    assert.equal(schoolLink.rows[0].status, "active");
+
+    const unverified = await request("/parents/me/students", { headers: authHeader({ role: "parent", parent_id: parentId }) });
+    assert.equal(unverified.status, 200);
+    assert.equal(unverified.body.students.some((student) => student.student_id === studentId), false);
+
+    await pool.query("UPDATE parents SET phone_verified_at = now() WHERE parent_id = $1", [parentId]);
+    const verified = await request("/parents/me/students", { headers: authHeader({ role: "parent", parent_id: parentId }) });
+    assert.equal(verified.status, 200);
+    assert.equal(verified.body.students.some((student) => student.student_id === studentId), true);
+  } finally {
+    await pool.query("DELETE FROM student_parents WHERE student_id = $1 AND parent_id = $2", [studentId, parentId]);
+    await pool.query("DELETE FROM school_parents WHERE school_id = $1 AND parent_id = $2", [fixtures.schoolA.school_id, parentId]);
+    await pool.query("DELETE FROM parents WHERE parent_id = $1", [parentId]);
+    await pool.query("DELETE FROM students WHERE student_id = $1", [studentId]);
+  }
+});
+
 test("school parent invitation is isolated and duplicate-safe", { skip: skipReason }, async () => {
   const response = await request("/school/parents/invitations", {
     method: "POST",
@@ -550,6 +589,52 @@ test(
     assert.deepEqual(response.body, {
       message: "Parent is already linked to this student",
     });
+  }
+);
+
+test(
+  "assigned teacher can mark a scheduled dose taken once",
+  { skip: skipReason },
+  async () => {
+    const dose = await insertRow(
+      "INSERT INTO tablet_doses (course_id, scheduled_date) VALUES ($1, $2) RETURNING dose_id",
+      [fixtures.course.course_id, "2026-01-04"]
+    );
+    try {
+      const response = await request(`/teacher/tablet-doses/${dose.dose_id}/take`, {
+        method: "POST",
+        headers: authHeader({
+          role: "teacher",
+          school_id: fixtures.schoolA.school_id,
+          teacher_id: fixtures.teacherA.teacher_id,
+        }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.body.tablet_dose.status, "taken");
+      assert.equal(response.body.tablet_dose.reported_by, fixtures.teacherA.teacher_id);
+
+      const repeated = await request(`/teacher/tablet-doses/${dose.dose_id}/take`, {
+        method: "POST",
+        headers: authHeader({
+          role: "teacher",
+          school_id: fixtures.schoolA.school_id,
+          teacher_id: fixtures.teacherA.teacher_id,
+        }),
+      });
+      assert.equal(repeated.status, 409);
+
+      const otherSchoolTeacher = await request(`/teacher/tablet-doses/${dose.dose_id}/take`, {
+        method: "POST",
+        headers: authHeader({
+          role: "teacher",
+          school_id: fixtures.schoolB.school_id,
+          teacher_id: fixtures.teacherB.teacher_id,
+        }),
+      });
+      assert.equal(otherSchoolTeacher.status, 404);
+    } finally {
+      await pool.query("DELETE FROM tablet_doses WHERE dose_id = $1", [dose.dose_id]);
+    }
   }
 );
 
