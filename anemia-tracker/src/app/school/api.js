@@ -1,6 +1,25 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_BASE_URL = 'http://172.30.216.30:3000';
+export const SUPPORTED_GRADES = Array.from({ length: 12 }, (_, index) => `Class ${index + 1}`);
+
+export function suggestNextSectionLetter(existingSectionNames = []) {
+  const letters = new Set(['A', 'B', 'C', 'D']);
+  if (Array.isArray(existingSectionNames)) {
+    for (const name of existingSectionNames) {
+      if (typeof name === 'string') {
+        const clean = name.trim().toUpperCase();
+        if (/^[A-Z]$/.test(clean)) {
+          letters.add(clean);
+        }
+      }
+    }
+  }
+  const sorted = Array.from(letters).sort();
+  const highest = sorted[sorted.length - 1];
+  const nextCode = highest.charCodeAt(0) + 1;
+  return nextCode <= 90 ? String.fromCharCode(nextCode) : '';
+}
 
 export function validateIndianMobileNumber(input) {
   if (typeof input !== 'string' || input.trim() === '') return { valid: false, reason: 'required', normalized: '' };
@@ -20,6 +39,7 @@ export function validateIndianMobileNumber(input) {
 async function request(path, options = {}, isProtected = false) {
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {
+      credentials: 'include',
       ...options,
       headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     });
@@ -50,6 +70,9 @@ export async function clearSchoolSession() {
 
 export function registerSchool(data) { return request('/schools', { method: 'POST', body: JSON.stringify(data) }); }
 export function loginSchool(data) { return request('/schools/login', { method: 'POST', body: JSON.stringify(data) }); }
+export function requestSchoolPasswordReset(email) { return request('/schools/password-reset/request', { method: 'POST', body: JSON.stringify({ email }) }); }
+export function verifySchoolPasswordReset(email, otp) { return request('/schools/password-reset/verify', { method: 'POST', body: JSON.stringify({ email, otp }) }); }
+export function completeSchoolPasswordReset(resetToken, password) { return request('/schools/password-reset/complete', { method: 'POST', body: JSON.stringify({ ...(resetToken ? { reset_token: resetToken } : {}), password }) }); }
 export function getSchoolProfile(token) { return request('/schools/me', { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function getTeachers(token) { return request('/teachers', { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function getTeacher(token, teacherId) { return request(`/teachers/${teacherId}`, { headers: { Authorization: `Bearer ${token}` } }, true); }
@@ -80,3 +103,29 @@ export function createClassroom(token, data) { return request('/classrooms', { m
 export function updateClassroom(token, classroomId, data) { return request(`/classrooms/${classroomId}`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
 export function deleteClassroom(token, classroomId) { return request(`/classrooms/${classroomId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, true); }
 export function createStudent(token, data) { return request('/students', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
+export function getStudentHbTests(token, studentId) { return request(`/students/${studentId}/hb-tests`, { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getHbTests(token) { return request('/hb-tests', { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getStudentTabletCourses(token, studentId) { return request(`/students/${studentId}/tablet-courses`, { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getStudentTabletDoses(token, studentId) { return request(`/students/${studentId}/tablet-doses`, { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getTabletCourseDoses(token, courseId) { return request(`/tablet-courses/${courseId}/tablet-doses`, { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getSchoolTabletCourses(token) { return request('/school/tablet-courses', { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getSchoolReports(token) { return request('/school/reports', { headers: { Authorization: `Bearer ${token}` } }, true); }
+
+
+export function getMyParentStudents(token) {
+  return request('/parents/me/students', {
+    headers: { Authorization: `Bearer ${token}` },
+  }, true);
+}
+
+export function getMyParentHbTests(token, studentId) {
+  return request(`/parents/me/students/${studentId}/hb-tests`, {
+    headers: { Authorization: `Bearer ${token}` },
+  }, true);
+}
+
+export function getMyParentTabletCourses(token, studentId) {
+  return request(`/parents/me/students/${studentId}/tablet-courses`, {
+    headers: { Authorization: `Bearer ${token}` },
+  }, true);
+}
