@@ -60,14 +60,22 @@ function isMockOtpSmsProviderEnabled() {
   return getOtpSmsProvider() === "mock";
 }
 
-function isOtpSmsDeliveryConfigured() {
+function isTwilioOtpSmsProviderConfigured(env = process.env) {
   return (
-    canReturnDevelopmentOtp() ||
-    (process.env.NODE_ENV !== "production" && isMockOtpSmsProviderEnabled())
+    getOtpSmsProvider() === "twilio" &&
+    Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_FROM_NUMBER)
   );
 }
 
-async function sendOtpSms(phoneNumber, otp) {
+function isOtpSmsDeliveryConfigured(env = process.env) {
+  return (
+    canReturnDevelopmentOtp() ||
+    (env.NODE_ENV !== "production" && isMockOtpSmsProviderEnabled()) ||
+    isTwilioOtpSmsProviderConfigured(env)
+  );
+}
+
+async function sendOtpSms(phoneNumber, otp, { fetchImpl = fetch, env = process.env } = {}) {
   const provider = getOtpSmsProvider();
 
   if (provider === "mock") {
@@ -87,6 +95,41 @@ async function sendOtpSms(phoneNumber, otp) {
         0,
         mockOtpDeliveries.length - MOCK_OTP_DELIVERY_HISTORY_LIMIT,
       );
+    }
+
+    return;
+  }
+
+  if (provider === "twilio") {
+    if (!isTwilioOtpSmsProviderConfigured(env)) {
+      const error = new Error("OTP delivery is not configured");
+      error.code = "OTP_DELIVERY_NOT_CONFIGURED";
+      throw error;
+    }
+
+    const accountSid = encodeURIComponent(env.TWILIO_ACCOUNT_SID);
+    const auth = Buffer.from(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`).toString("base64");
+    const body = new URLSearchParams({
+      From: env.TWILIO_FROM_NUMBER,
+      To: normalizePhoneNumber(phoneNumber),
+      Body: `Your Anemia Tracker verification code is ${otp}. It expires in 5 minutes.`,
+    });
+    const response = await fetchImpl(
+      `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: body.toString(),
+      },
+    );
+
+    if (!response.ok) {
+      const error = new Error("OTP delivery failed");
+      error.code = "OTP_DELIVERY_FAILED";
+      throw error;
     }
 
     return;
@@ -151,6 +194,7 @@ module.exports = {
   getOtpCooldownState,
   getOtpSmsProvider,
   isMockOtpSmsProviderEnabled,
+  isTwilioOtpSmsProviderConfigured,
   isOtpSmsDeliveryConfigured,
   mockOtpDeliveries,
   normalizePhoneNumber,

@@ -29,6 +29,9 @@ const originalEnv = {
   JWT_SECRET: process.env.JWT_SECRET,
   NODE_ENV: process.env.NODE_ENV,
   OTP_SMS_PROVIDER: process.env.OTP_SMS_PROVIDER,
+  TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
+  TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
+  TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER,
 };
 
 process.env.DATABASE_URL = "postgres://unit-test";
@@ -112,6 +115,9 @@ beforeEach(() => {
   pool.query = originalPoolQuery;
   delete process.env.ALLOW_DEV_OTP;
   delete process.env.OTP_SMS_PROVIDER;
+  delete process.env.TWILIO_ACCOUNT_SID;
+  delete process.env.TWILIO_AUTH_TOKEN;
+  delete process.env.TWILIO_FROM_NUMBER;
   process.env.NODE_ENV = "test";
 });
 
@@ -159,6 +165,29 @@ test("mock provider is rejected in production", async () => {
     },
   );
   assert.equal(otpHelpers.mockOtpDeliveries.length, 0);
+});
+
+test("Twilio provider sends a form-encoded SMS without exposing the OTP", async () => {
+  process.env.NODE_ENV = "production";
+  process.env.OTP_SMS_PROVIDER = "twilio";
+  process.env.TWILIO_ACCOUNT_SID = "AC123456789";
+  process.env.TWILIO_AUTH_TOKEN = "twilio-test-token";
+  process.env.TWILIO_FROM_NUMBER = "+15551234567";
+  let request;
+
+  assert.equal(otpHelpers.isTwilioOtpSmsProviderConfigured(), true);
+  await otpHelpers.sendOtpSms("+919876543210", "123456", {
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return { ok: true };
+    },
+  });
+
+  assert.match(request.url, /api\.twilio\.com/);
+  assert.equal(request.options.method, "POST");
+  assert.match(request.options.headers.Authorization, /^Basic /);
+  assert.match(request.options.body, /To=%2B919876543210/);
+  assert.match(request.options.body, /Body=Your\+Anemia\+Tracker\+verification\+code\+is\+123456/);
 });
 
 test("development OTP response gate is explicit and disabled in production", () => {

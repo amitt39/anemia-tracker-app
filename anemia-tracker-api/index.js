@@ -10,6 +10,7 @@ const {
   createOtpRequestSuccessResponse,
   canReturnDevelopmentOtp,
   getOtpCooldownState,
+  getOtpSmsProvider,
   isMockOtpSmsProviderEnabled,
   isValidPhoneNumber,
   validateIndianMobileNumber,
@@ -1829,7 +1830,7 @@ app.post("/parents/login/request-otp", otpRequestLimiter, requireJsonBody, async
       attempts_remaining: 5,
     });
 
-    if (isMockOtpSmsProviderEnabled()) {
+    if (isMockOtpSmsProviderEnabled() || (getOtpSmsProvider() === "twilio" && !canReturnDevelopmentOtp())) {
       await sendOtpSms(phoneNumber, otp);
     }
 

@@ -5,6 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "check": "node --check index.js && node --check otp.js && node --check scripts/seed-demo-data.js",
+    "seed:demo": "SEED_DEMO_DATA_CONFIRM=LOCAL node scripts/seed-demo-data.js",
     "test": "node test/otp.test.js && node test/email.test.js && node test/reset-school-password.test.js && node test/authorization.test.js"
   },
   "keywords": [],
