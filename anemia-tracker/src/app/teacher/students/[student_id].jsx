@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -23,7 +23,8 @@ import {
   getTeacherStudentTabletCourses,
   getTeacherStudentTabletDoses,
   markTeacherTabletDoseTaken,
-} from '../api';
+} from '../../../lib/teacher-api';
+import { AUTH } from '../../../components/auth-ui';
 
 function getTodayString() {
   const d = new Date();
@@ -33,10 +34,26 @@ function getTodayString() {
   return `${year}-${month}-${day}`;
 }
 
+function isValidDateString(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function doseLabel(dose) {
+  if (dose.status === 'taken') return 'Taken';
+  const today = getTodayString();
+  if (dose.status === 'scheduled' && dose.scheduled_date < today) return 'Overdue';
+  if (dose.status === 'scheduled' && dose.scheduled_date === today) return 'Due today';
+  return 'Scheduled';
+}
+
 export default function TeacherStudentDetail() {
   const { student_id } = useLocalSearchParams();
+  const scrollRef = useRef(null);
   const [token, setToken] = useState(null);
   const [student, setStudent] = useState(null);
+  const [parentContacts, setParentContacts] = useState([]);
   const [hbTests, setHbTests] = useState([]);
   const [courses, setCourses] = useState([]);
   const [doses, setDoses] = useState([]);
@@ -61,36 +78,46 @@ export default function TeacherStudentDetail() {
   const [courseSuccess, setCourseSuccess] = useState('');
   const [courseError, setCourseError] = useState('');
 
+  async function redirectIfSessionExpired(error) {
+    if (error.code !== 'SESSION_EXPIRED') return false;
+    await clearTeacherSession();
+    router.replace('/teacher/login?reason=session_expired');
+    return true;
+  }
+
   const loadData = useCallback(async (authToken) => {
     try {
       setError('');
       const [stuRes, hbRes, courseRes, doseRes] = await Promise.all([
         getTeacherStudent(authToken, student_id),
-        getTeacherStudentHbTests(authToken, student_id).catch(() => ({ hb_tests: [] })),
-        getTeacherStudentTabletCourses(authToken, student_id).catch(() => ({ tablet_courses: [] })),
-        getTeacherStudentTabletDoses(authToken, student_id).catch(() => ({ tablet_doses: [] })),
+        getTeacherStudentHbTests(authToken, student_id),
+        getTeacherStudentTabletCourses(authToken, student_id),
+        getTeacherStudentTabletDoses(authToken, student_id),
       ]);
 
       setStudent(stuRes.student);
+      setParentContacts(Array.isArray(stuRes.student?.parent_contacts) ? stuRes.student.parent_contacts : []);
       setHbTests(hbRes.hb_tests || []);
       setCourses(courseRes.tablet_courses || []);
       setDoses(doseRes.tablet_doses || []);
 
-      if (hbRes.hb_tests && hbRes.hb_tests.length > 0 && !selectedTestId) {
-        setSelectedTestId(String(hbRes.hb_tests[0].test_id));
-      }
+      setSelectedTestId((current) => {
+        const tests = hbRes.hb_tests || [];
+        if (!tests.length) return '';
+        return tests.some((test) => String(test.test_id) === current)
+          ? current
+          : String(tests[0].test_id);
+      });
+      return true;
     } catch (e) {
-      if (e.code === 'SESSION_EXPIRED') {
-        await clearTeacherSession();
-        router.replace('/teacher/login?reason=session_expired');
-        return;
-      }
+      if (await redirectIfSessionExpired(e)) return;
       setError(e.message || 'Unable to load student information.');
+      return false;
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [student_id, selectedTestId]);
+  }, [student_id]);
 
   useEffect(() => {
     async function init() {
@@ -114,12 +141,17 @@ export default function TeacherStudentDetail() {
   async function handleRecordHb() {
     setHbError('');
     setHbSuccess('');
-    const level = parseFloat(newHbLevel.trim());
-    if (Number.isNaN(level) || level < 2.0 || level > 25.0) {
+    const hbValue = newHbLevel.trim();
+    if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(hbValue)) {
       setHbError('Hemoglobin level must be a number between 2.0 and 25.0 g/dL.');
       return;
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(newHbDate.trim())) {
+    const level = Number(hbValue);
+    if (!Number.isFinite(level) || level < 2.0 || level > 25.0) {
+      setHbError('Hemoglobin level must be a number between 2.0 and 25.0 g/dL.');
+      return;
+    }
+    if (!isValidDateString(newHbDate.trim())) {
       setHbError('Date must be in YYYY-MM-DD format.');
       return;
     }
@@ -132,13 +164,16 @@ export default function TeacherStudentDetail() {
       });
       setHbSuccess('Hb test recorded successfully.');
       setNewHbLevel('');
-      await loadData(token);
+      const refreshed = await loadData(token);
+      if (!refreshed) setHbError('Hb test was saved, but the student record could not be refreshed.');
     } catch (e) {
+      if (await redirectIfSessionExpired(e)) return;
       setHbError(e.message || 'Failed to record Hb test.');
     } finally {
       setSubmittingHb(false);
     }
   }
+
 
   async function handleCreateCourse() {
     setCourseError('');
@@ -147,7 +182,7 @@ export default function TeacherStudentDetail() {
       setCourseError('Please select a reference Hb test for this course.');
       return;
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate.trim()) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate.trim())) {
+    if (!isValidDateString(startDate.trim()) || !isValidDateString(endDate.trim())) {
       setCourseError('Start and end dates must be in YYYY-MM-DD format.');
       return;
     }
@@ -173,20 +208,25 @@ export default function TeacherStudentDetail() {
         current.setDate(current.getDate() + 7);
       }
 
+      let doseScheduleFailed = false;
       if (dates.length > 0 && result.tablet_course?.course_id) {
         try {
           await createTeacherTabletDoses(token, result.tablet_course.course_id, {
             scheduled_dates: dates,
           });
         } catch (_) {
-          // If auto dose scheduling fails, course creation still succeeded
+          doseScheduleFailed = true;
         }
       }
 
-      setCourseSuccess('Tablet course created successfully.');
+      setCourseSuccess(doseScheduleFailed
+        ? 'Tablet course created, but scheduled doses could not be created.'
+        : 'Tablet course created successfully.');
       setShowCourseForm(false);
-      await loadData(token);
+      const refreshed = await loadData(token);
+      if (!refreshed) setCourseError('Course was created, but the student record could not be refreshed.');
     } catch (e) {
+      if (await redirectIfSessionExpired(e)) return;
       setCourseError(e.message || 'Failed to create tablet course.');
     } finally {
       setSubmittingCourse(false);
@@ -198,19 +238,39 @@ export default function TeacherStudentDetail() {
     setTakingDoseId(doseId);
     try {
       await markTeacherTabletDoseTaken(token, doseId);
-      await loadData(token);
+      const refreshed = await loadData(token);
+      if (!refreshed) setError('Dose was saved, but the student record could not be refreshed.');
     } catch (e) {
-      setError(e.message || 'Unable to mark this dose as taken.');
+      if (await redirectIfSessionExpired(e)) return;
+      setError(e.message === 'Internal server error'
+        ? 'This tablet action could not be saved because the backend dose-recorder schema needs a product decision.'
+        : (e.message || 'Unable to mark this dose as taken.'));
     } finally {
       setTakingDoseId(null);
     }
   }
 
+  async function retry() {
+    if (!token) return;
+    setLoading(true);
+    await loadData(token);
+  }
+
   if (loading) {
     return (
       <SafeAreaView style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#1565c0" />
+        <ActivityIndicator size="large" color={AUTH.secondary} />
         <Text style={styles.loadingText}>Loading student records...</Text>
+      </SafeAreaView>
+    );
+  }
+
+  if (!student && error) {
+    return (
+      <SafeAreaView style={styles.centerContainer}>
+        <Text style={styles.errorText}>{error}</Text>
+        <Pressable style={styles.retryButton} onPress={retry}><Text style={styles.retryText}>Retry</Text></Pressable>
+        <Pressable style={styles.backBtn} onPress={() => router.push('/teacher/students')}><Text style={styles.backBtnText}>Back to Students</Text></Pressable>
       </SafeAreaView>
     );
   }
@@ -218,6 +278,7 @@ export default function TeacherStudentDetail() {
   return (
     <SafeAreaView style={styles.page}>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
@@ -248,6 +309,7 @@ export default function TeacherStudentDetail() {
         {error ? (
           <View style={styles.errorBox}>
             <Text style={styles.errorText}>{error}</Text>
+            <Pressable style={styles.retryButton} onPress={retry}><Text style={styles.retryText}>Retry</Text></Pressable>
           </View>
         ) : null}
 
@@ -274,8 +336,52 @@ export default function TeacherStudentDetail() {
                 </View>
               ) : null}
             </View>
+            <View style={styles.quickActionRow}>
+              <View style={styles.quickActionCopy}>
+                <Text style={styles.quickActionTitle}>Need to add today’s screening?</Text>
+                <Text style={styles.quickActionText}>Record a new Hb result for this student in one step.</Text>
+              </View>
+              <Pressable
+                style={styles.recordHbQuickButton}
+                accessibilityRole="button"
+                accessibilityLabel="Record Hb result"
+                onPress={() => scrollRef.current?.scrollTo({ y: 360, animated: true })}
+              >
+                <Text style={styles.recordHbQuickButtonText}>+ Record Hb</Text>
+              </Pressable>
+            </View>
           </View>
         ) : null}
+
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Parent/Guardian Information</Text>
+          <Text style={styles.sectionSubtitle}>Verified contact information linked to this student</Text>
+
+          {student?.parent_contact_unavailable ? (
+            <View style={styles.contactEmptyBox}>
+              <Text style={styles.emptyText}>Parent/guardian contact was marked unavailable when this student was registered.</Text>
+            </View>
+          ) : parentContacts.length === 0 ? (
+            <View style={styles.contactEmptyBox}>
+              <Text style={styles.emptyText}>No verified parent/guardian contact is linked to this student.</Text>
+            </View>
+          ) : (
+            <View style={styles.contactList}>
+              {parentContacts.map((contact, index) => (
+                <View key={`${contact.phone_number || 'contact'}-${index}`} style={styles.contactCard}>
+                  <Text style={styles.contactTitle}>Parent/Guardian {index + 1}</Text>
+                  <Text style={styles.contactValue}>
+                    Phone: {contact.phone_number || 'Phone number unavailable'}
+                  </Text>
+                  <Text style={styles.contactValue}>
+                    Relationship: {contact.relationship || 'Not recorded'}
+                  </Text>
+                  <Text style={styles.contactNote}>Parent name is not stored in the available record.</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
 
         {/* Section: Hb Test History & Record New */}
         <View style={styles.sectionCard}>
@@ -340,21 +446,7 @@ export default function TeacherStudentDetail() {
                     <Text style={styles.recordMain}>{test.hb_level} g/dL</Text>
                     <Text style={styles.recordSub}>Tested on {test.test_date}</Text>
                   </View>
-                  <View
-                    style={[
-                      styles.hbLevelTag,
-                      test.hb_level < 11.0 ? styles.hbLow : styles.hbNormal,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.hbLevelTagText,
-                        test.hb_level < 11.0 ? styles.hbLowText : styles.hbNormalText,
-                      ]}
-                    >
-                      {test.hb_level < 11.0 ? 'Below 11.0 g/dL' : 'Normal range'}
-                    </Text>
-                  </View>
+                  <Text style={styles.recordSub}>Recorded result</Text>
                 </View>
               ))}
             </View>
@@ -492,7 +584,7 @@ export default function TeacherStudentDetail() {
                             ]}
                           >
                             <Text style={styles.doseDate}>{dose.scheduled_date}</Text>
-                            <Text style={styles.doseStatus}>{dose.status}</Text>
+                            <Text style={[styles.doseStatus, doseLabel(dose) === 'Overdue' && styles.doseOverdue]}>{doseLabel(dose)}</Text>
                             {dose.status === 'scheduled' ? (
                               <Pressable
                                 disabled={takingDoseId === dose.dose_id}
@@ -524,11 +616,11 @@ export default function TeacherStudentDetail() {
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    backgroundColor: '#f5f7fa',
+    backgroundColor: AUTH.background,
   },
   centerContainer: {
     flex: 1,
-    backgroundColor: '#f5f7fa',
+    backgroundColor: AUTH.background,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
@@ -536,7 +628,7 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 12,
     fontSize: 16,
-    color: '#667085',
+    color: AUTH.muted,
   },
   scrollContent: {
     padding: 16,
@@ -553,13 +645,13 @@ const styles = StyleSheet.create({
   backBtn: {
     paddingVertical: 6,
     paddingHorizontal: 12,
-    backgroundColor: '#fff',
+    backgroundColor: AUTH.surface,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#d0d5dd',
+    borderColor: AUTH.outlineVariant,
   },
   backBtnText: {
-    color: '#344054',
+    color: AUTH.muted,
     fontSize: 13,
     fontWeight: '600',
   },
@@ -573,8 +665,22 @@ const styles = StyleSheet.create({
     color: '#b42318',
     fontSize: 14,
   },
+  retryButton: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    backgroundColor: AUTH.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#fecdca',
+  },
+  retryText: {
+    color: '#b42318',
+    fontWeight: '700',
+  },
   studentCard: {
-    backgroundColor: '#fff',
+    backgroundColor: AUTH.surface,
     padding: 20,
     borderRadius: 12,
     marginBottom: 20,
@@ -588,6 +694,41 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 12,
   },
+  quickActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 16,
+    paddingTop: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#ead8df',
+  },
+  quickActionCopy: {
+    flex: 1,
+  },
+  quickActionTitle: {
+    color: '#59253e',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  quickActionText: {
+    color: AUTH.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  recordHbQuickButton: {
+    backgroundColor: '#743b55',
+    borderRadius: 9,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+  },
+  recordHbQuickButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   studentInfoLeft: {
     flex: 1,
     minWidth: 200,
@@ -595,17 +736,17 @@ const styles = StyleSheet.create({
   studentName: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#1a1a1a',
+    color: AUTH.primary,
   },
   studentClass: {
     fontSize: 14,
-    color: '#344054',
+    color: AUTH.muted,
     marginTop: 4,
     fontWeight: '500',
   },
   studentSub: {
     fontSize: 13,
-    color: '#667085',
+    color: AUTH.muted,
     marginTop: 2,
   },
   flagBadge: {
@@ -620,10 +761,10 @@ const styles = StyleSheet.create({
     color: '#b42318',
   },
   sectionCard: {
-    backgroundColor: '#fff',
+    backgroundColor: AUTH.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#eaecf0',
+    borderColor: AUTH.outlineVariant,
     padding: 20,
     marginBottom: 20,
   },
@@ -636,26 +777,56 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#1a1a1a',
+    color: AUTH.primary,
   },
   sectionSubtitle: {
     fontSize: 13,
-    color: '#667085',
+    color: AUTH.muted,
     marginTop: 2,
     marginBottom: 14,
   },
+  contactList: {
+    gap: 8,
+  },
+  contactCard: {
+    backgroundColor: AUTH.surfaceLow,
+    borderWidth: 1,
+    borderColor: AUTH.outlineVariant,
+    borderRadius: 8,
+    padding: 12,
+    gap: 3,
+  },
+  contactTitle: {
+    color: AUTH.primary,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  contactValue: {
+    color: AUTH.muted,
+    fontSize: 14,
+  },
+  contactNote: {
+    color: AUTH.muted,
+    fontSize: 12,
+    marginTop: 3,
+  },
+  contactEmptyBox: {
+    backgroundColor: AUTH.surfaceLow,
+    borderRadius: 8,
+    padding: 12,
+  },
   formContainer: {
-    backgroundColor: '#f8fafc',
+    backgroundColor: AUTH.surfaceLow,
     padding: 16,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: AUTH.outlineVariant,
     marginBottom: 16,
   },
   formTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#1e293b',
+    color: AUTH.primary,
     marginBottom: 12,
   },
   formRow: {
@@ -671,13 +842,13 @@ const styles = StyleSheet.create({
   inputLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#475467',
+    color: AUTH.muted,
     marginBottom: 4,
   },
   input: {
-    backgroundColor: '#fff',
+    backgroundColor: AUTH.surface,
     borderWidth: 1,
-    borderColor: '#d0d5dd',
+    borderColor: AUTH.outlineVariant,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 9,
@@ -694,7 +865,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   actionBtn: {
-    backgroundColor: '#1565c0',
+    backgroundColor: AUTH.primary,
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 8,
@@ -712,11 +883,11 @@ const styles = StyleSheet.create({
   toggleCourseBtn: {
     paddingVertical: 6,
     paddingHorizontal: 12,
-    backgroundColor: '#e3f2fd',
+    backgroundColor: AUTH.secondaryFixed,
     borderRadius: 6,
   },
   toggleCourseBtnText: {
-    color: '#0d47a1',
+    color: AUTH.primary,
     fontWeight: '600',
     fontSize: 13,
   },
@@ -727,20 +898,20 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   chip: {
-    backgroundColor: '#fff',
+    backgroundColor: AUTH.surface,
     borderWidth: 1,
-    borderColor: '#d0d5dd',
+    borderColor: AUTH.outlineVariant,
     borderRadius: 6,
     paddingVertical: 6,
     paddingHorizontal: 10,
   },
   chipActive: {
-    backgroundColor: '#1565c0',
-    borderColor: '#1565c0',
+    backgroundColor: AUTH.primary,
+    borderColor: AUTH.primary,
   },
   chipText: {
     fontSize: 13,
-    color: '#344054',
+    color: AUTH.muted,
   },
   chipTextActive: {
     color: '#fff',
@@ -755,7 +926,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     paddingHorizontal: 14,
-    backgroundColor: '#f9fafb',
+    backgroundColor: AUTH.surface,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#f2f4f7',
@@ -763,11 +934,11 @@ const styles = StyleSheet.create({
   recordMain: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#101828',
+    color: AUTH.primary,
   },
   recordSub: {
     fontSize: 12,
-    color: '#667085',
+    color: AUTH.muted,
     marginTop: 2,
   },
   hbLevelTag: {
@@ -792,11 +963,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   courseCard: {
-    backgroundColor: '#f9fafb',
+    backgroundColor: AUTH.surface,
     padding: 14,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#eaecf0',
+    borderColor: AUTH.outlineVariant,
     marginBottom: 8,
   },
   courseHeader: {
@@ -810,11 +981,11 @@ const styles = StyleSheet.create({
   courseTitle: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#101828',
+    color: AUTH.primary,
   },
   courseDoseCount: {
     fontSize: 13,
-    color: '#667085',
+    color: AUTH.muted,
   },
   doseGrid: {
     flexDirection: 'row',
@@ -836,9 +1007,13 @@ const styles = StyleSheet.create({
     fontSize: 10,
     textTransform: 'capitalize',
   },
+  doseOverdue: {
+    color: '#b42318',
+    fontWeight: '700',
+  },
   takeDoseBtn: {
     marginTop: 5,
-    backgroundColor: '#1565c0',
+    backgroundColor: AUTH.primary,
     paddingVertical: 5,
     paddingHorizontal: 8,
     borderRadius: 5,
@@ -854,8 +1029,8 @@ const styles = StyleSheet.create({
     borderColor: '#a6f4c5',
   },
   doseScheduled: {
-    backgroundColor: '#f2f4f7',
-    borderColor: '#d0d5dd',
+    backgroundColor: AUTH.surfaceHigh,
+    borderColor: AUTH.outlineVariant,
   },
   doseMissed: {
     backgroundColor: '#fee4e2',
@@ -866,7 +1041,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emptyText: {
-    color: '#667085',
+    color: AUTH.muted,
     fontSize: 13,
   },
 });

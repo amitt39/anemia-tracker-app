@@ -1,417 +1,316 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, RefreshControl, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { clearSchoolSession, getSchoolProfile, getSchoolReports, updateStudent } from './api';
+import { clearSchoolSession, getHbTests, getSchoolProfile, getSchoolReports, updateStudent } from '../../lib/school-api';
 
-const classroomLabel = (item) => item?.grade_name && item?.section_name ? `${item.grade_name} – ${item.section_name}` : `Legacy: ${item?.class_name || 'classroom'}`;
+const COLORS = {
+  background: '#fcf9f4',
+  surface: '#ffffff',
+  low: '#f6f3ee',
+  primary: '#59253e',
+  primaryContainer: '#743b55',
+  secondary: '#97425d',
+  secondaryFixed: '#ffd9e1',
+  tertiary: '#1d3d33',
+  tertiaryFixed: '#c7eadc',
+  text: '#1c1c19',
+  muted: '#514348',
+  outlineVariant: '#d5c2c7',
+};
+
+const classroomLabel = (item) => item?.grade_name && item?.section_name
+  ? `${item.grade_name} – ${item.section_name}`
+  : item?.class_name || 'Classroom';
 
 export default function SchoolReports() {
   const [token, setToken] = useState('');
   const [profile, setProfile] = useState(null);
   const [report, setReport] = useState(null);
+  const [hbTests, setHbTests] = useState([]);
+  const [view, setView] = useState('overview');
+  const [search, setSearch] = useState('');
+  const [selectedClassroom, setSelectedClassroom] = useState('');
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [message, setMessage] = useState('');
-  const [activeTab, setActiveTab] = useState('overview');
-  const [queueFilter, setQueueFilter] = useState('all');
   const [busyStudentId, setBusyStudentId] = useState(null);
 
-  const expire = useCallback(async (e) => {
-    if (e.code === 'SESSION_EXPIRED') {
-      await clearSchoolSession();
-      router.replace('/school/login?reason=session_expired');
-      return true;
-    }
-    return false;
+  const expire = useCallback(async (requestError) => {
+    if (requestError.code !== 'SESSION_EXPIRED') return false;
+    await clearSchoolSession();
+    router.replace('/school/login?reason=session_expired');
+    return true;
   }, []);
 
   const load = useCallback(async (authToken) => {
-    const [p, r] = await Promise.all([
+    const [profileResult, reportResult, hbResult] = await Promise.all([
       getSchoolProfile(authToken),
       getSchoolReports(authToken),
+      getHbTests(authToken),
     ]);
-    setProfile(p.school || null);
-    setReport(r || null);
+    setProfile(profileResult.school || null);
+    setReport(reportResult || null);
+    setHbTests(hbResult.hb_tests || []);
+    setLoadError('');
   }, []);
 
   useEffect(() => {
-    AsyncStorage.getItem('token').then(async (val) => {
-      if (!val) return router.replace('/school/login');
-      setToken(val);
+    AsyncStorage.getItem('token').then(async (value) => {
+      if (!value) return router.replace('/school/login');
+      setToken(value);
       try {
-        await load(val);
-      } catch (e) {
-        if (!(await expire(e))) setError(e.message || 'Unable to load school reports.');
+        await load(value);
+      } catch (requestError) {
+        if (!(await expire(requestError))) setLoadError(requestError.message || 'Unable to load health reports.');
       } finally {
         setLoading(false);
       }
     });
-  }, [load, expire]);
+  }, [expire, load]);
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!token) return undefined;
-      let mounted = true;
-      load(token).catch(async (e) => {
-        if (mounted && !(await expire(e))) setError(e.message || 'Unable to refresh reports.');
-      });
-      return () => { mounted = false; };
-    }, [token, load, expire])
-  );
+  useFocusEffect(useCallback(() => {
+    if (!token) return undefined;
+    let mounted = true;
+    load(token).catch(async (requestError) => {
+      if (mounted && !(await expire(requestError))) setLoadError(requestError.message || 'Unable to refresh health reports.');
+    });
+    return () => { mounted = false; };
+  }, [expire, load, token]));
 
-  async function toggleFlag(studentId, currentFlag) {
+  const summary = report?.summary || {};
+  const classrooms = report?.classrooms || [];
+  const followUpQueue = useMemo(() => report?.follow_up_queue || [], [report]);
+  const visibleFollowUp = useMemo(() => filterStudents(followUpQueue, search, selectedClassroom), [followUpQueue, search, selectedClassroom]);
+  const visibleHb = useMemo(() => filterStudents(hbTests, search, selectedClassroom), [hbTests, search, selectedClassroom]);
+  const priorityCount = followUpQueue.length;
+  const totalStudents = Number(summary.total_students) || 0;
+  const screenedStudents = hbTests.reduce((ids, test) => ids.add(test.student_id), new Set()).size;
+  const screeningPercent = totalStudents ? Math.round((screenedStudents / totalStudents) * 100) : 0;
+
+  async function refresh() {
+    if (!token) return;
+    setRefreshing(true);
+    try {
+      await load(token);
+    } catch (requestError) {
+      if (!(await expire(requestError))) setLoadError(requestError.message || 'Unable to refresh health reports.');
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function toggleFlag(studentId, isFlagged) {
     setBusyStudentId(studentId);
-    setError('');
+    setActionError('');
     setMessage('');
     try {
-      await updateStudent(token, studentId, { is_flagged: !currentFlag });
+      await updateStudent(token, studentId, { is_flagged: !isFlagged });
       await load(token);
-      setMessage(currentFlag ? 'Flag removed from student.' : 'Student flagged for follow-up.');
-    } catch (e) {
-      if (!(await expire(e))) setError(e.message || 'Unable to update student flag.');
+      setMessage(isFlagged ? 'Follow-up flag removed.' : 'Student added to follow-up.');
+    } catch (requestError) {
+      if (!(await expire(requestError))) setActionError(requestError.message || 'Unable to update follow-up status.');
     } finally {
       setBusyStudentId(null);
     }
   }
 
-  if (loading) {
-    return <View style={styles.center}><ActivityIndicator /></View>;
-  }
+  if (loading) return <View style={styles.center}><ActivityIndicator color={COLORS.primary} /><Text style={styles.muted}>Preparing your health summary…</Text></View>;
 
-  const summary = report?.summary || {};
-  const followUpQueue = report?.follow_up_queue || [];
-  const classrooms = report?.classrooms || [];
-
-  const filteredQueue = followUpQueue.filter((item) => {
-    if (queueFilter === 'flagged') return Boolean(item.is_flagged);
-    if (queueFilter === 'missed') return (item.missed_doses || 0) > 0;
-    return true;
-  });
+  if (loadError) return <View style={styles.center}><Text style={styles.errorText}>{loadError}</Text><Pressable style={styles.primaryButton} onPress={async () => { setLoading(true); setLoadError(''); try { await load(token); } catch (requestError) { if (!(await expire(requestError))) setLoadError(requestError.message || 'Unable to load health reports.'); } finally { setLoading(false); } }}><Text style={styles.primaryButtonText}>Try again</Text></Pressable></View>;
 
   return (
-    <SafeAreaView style={styles.page}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.title}>Reports & Follow-up</Text>
-            <Text style={styles.muted}>{profile?.school_name || 'School health program analytics'}</Text>
-          </View>
-          <View style={styles.nav}>
-            <Pressable onPress={() => router.push('/school/dashboard')}><Text style={styles.navLink}>Dashboard</Text></Pressable>
-            <Pressable onPress={() => router.push('/school/tablets')}><Text style={styles.navLink}>Tablets</Text></Pressable>
-            <Pressable onPress={() => router.push('/school/parents')}><Text style={styles.navLink}>Parents</Text></Pressable>
-            <Pressable onPress={async () => { await clearSchoolSession(); router.replace('/school/login'); }}><Text style={styles.logout}>Logout</Text></Pressable>
-          </View>
+    <SafeAreaView style={styles.page} edges={['top', 'bottom']}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={COLORS.primary} />}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.topBar}>
+          <Pressable onPress={() => router.push('/school/dashboard')}><Text style={styles.back}>‹  Dashboard</Text></Pressable>
+          <Text style={styles.topLabel}>SCHOOL ADMIN</Text>
         </View>
 
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
-        {message ? <Text style={styles.messageText}>{message}</Text> : null}
-
-        {/* Tab Navigation */}
-        <View style={styles.tabs}>
-          <Pressable style={[styles.tab, activeTab === 'overview' && styles.tabActive]} onPress={() => setActiveTab('overview')}>
-            <Text style={[styles.tabText, activeTab === 'overview' && styles.tabTextActive]}>Program Overview</Text>
-          </Pressable>
-          <Pressable style={[styles.tab, activeTab === 'followup' && styles.tabActive]} onPress={() => setActiveTab('followup')}>
-            <Text style={[styles.tabText, activeTab === 'followup' && styles.tabTextActive]}>
-              Follow-up Queue ({followUpQueue.length})
-            </Text>
-          </Pressable>
-          <Pressable style={[styles.tab, activeTab === 'classrooms' && styles.tabActive]} onPress={() => setActiveTab('classrooms')}>
-            <Text style={[styles.tabText, activeTab === 'classrooms' && styles.tabTextActive]}>
-              Classroom Breakdown ({classrooms.length})
-            </Text>
-          </Pressable>
+        <View style={styles.hero}>
+          <Text style={styles.eyebrow}>School health program</Text>
+          <Text style={styles.title}>Health report</Text>
+          <Text style={styles.heroText}>{profile?.school_name || 'One simple view of screening, follow-up, and supplementation.'}</Text>
         </View>
 
-        {/* Tab 1: Program Overview */}
-        {activeTab === 'overview' && (
-          <View style={styles.sectionContainer}>
-            <Text style={styles.sectionHeading}>Program Health Summary</Text>
-            <View style={styles.grid}>
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>Students Enrolled</Text>
-                <Text style={styles.statNumber}>{summary.total_students || 0}</Text>
-                <Text style={styles.statSub}>Across {summary.total_classrooms || 0} classrooms</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>Flagged for Follow-up</Text>
-                <Text style={[styles.statNumber, { color: summary.flagged_students > 0 ? '#b42318' : '#344054' }]}>
-                  {summary.flagged_students || 0}
-                </Text>
-                <Text style={styles.statSub}>Require clinical or parent review</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>Hb Tests Recorded</Text>
-                <Text style={styles.statNumber}>{summary.total_hb_tests || 0}</Text>
-                <Text style={styles.statSub}>Total screening records</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>Adherence Rate</Text>
-                <Text style={[styles.statNumber, { color: '#027a48' }]}>
-                  {summary.adherence_rate !== null && summary.adherence_rate !== undefined ? `${summary.adherence_rate}%` : '—'}
-                </Text>
-                <Text style={styles.statSub}>Doses taken vs total due</Text>
-              </View>
-            </View>
+        <View style={styles.navRow}>
+          <Pressable onPress={() => router.push('/school/students')}><Text style={styles.navLink}>Students</Text></Pressable>
+          <Pressable onPress={() => router.push('/school/teachers')}><Text style={styles.navLink}>Teachers</Text></Pressable>
+          <Pressable onPress={() => router.push('/school/classrooms')}><Text style={styles.navLink}>Classrooms</Text></Pressable>
+          <Pressable onPress={() => router.push('/school/tablets')}><Text style={styles.navLink}>Tablets</Text></Pressable>
+          <Pressable onPress={() => router.push('/school/parents')}><Text style={styles.navLink}>Parents</Text></Pressable>
+        </View>
 
-            <Text style={[styles.sectionHeading, { marginTop: 16 }]}>Supplementation Overview</Text>
-            <View style={styles.card}>
-              <View style={styles.rowItem}>
-                <Text style={styles.rowLabel}>Total Tablet Courses</Text>
-                <Text style={styles.rowValue}>{summary.total_courses || 0}</Text>
-              </View>
-              <View style={styles.rowItem}>
-                <Text style={styles.rowLabel}>Active Courses</Text>
-                <Text style={[styles.rowValue, { color: '#027a48' }]}>{summary.active_courses || 0}</Text>
-              </View>
-              <View style={styles.rowItem}>
-                <Text style={styles.rowLabel}>Completed Courses</Text>
-                <Text style={styles.rowValue}>{summary.completed_courses || 0}</Text>
-              </View>
-              <View style={styles.rowItem}>
-                <Text style={styles.rowLabel}>Total Doses Scheduled</Text>
-                <Text style={styles.rowValue}>{summary.total_doses || 0}</Text>
-              </View>
-              <View style={styles.rowItem}>
-                <Text style={styles.rowLabel}>Doses Administered (Taken)</Text>
-                <Text style={[styles.rowValue, { color: '#027a48' }]}>{summary.taken_doses || 0}</Text>
-              </View>
-              <View style={styles.rowItem}>
-                <Text style={styles.rowLabel}>Doses Missed</Text>
-                <Text style={[styles.rowValue, { color: summary.missed_doses > 0 ? '#b42318' : '#344054' }]}>
-                  {summary.missed_doses || 0}
-                </Text>
-              </View>
-              <View style={[styles.rowItem, { borderBottomWidth: 0 }]}>
-                <Text style={styles.rowLabel}>Upcoming Scheduled Doses</Text>
-                <Text style={styles.rowValue}>{summary.upcoming_doses || 0}</Text>
-              </View>
-            </View>
+        {actionError ? <Text style={styles.errorText}>{actionError}</Text> : null}
+        {message ? <Text style={styles.successText}>✓  {message}</Text> : null}
+
+        <View style={[styles.priorityCard, priorityCount ? styles.priorityCardAlert : styles.priorityCardClear]}>
+          <View style={styles.priorityIcon}><Text style={styles.priorityIconText}>{priorityCount ? '!' : '✓'}</Text></View>
+          <View style={styles.priorityCopy}>
+            <Text style={styles.priorityTitle}>{priorityCount ? `${priorityCount} student${priorityCount === 1 ? '' : 's'} need attention` : 'No follow-up cases right now'}</Text>
+            <Text style={styles.priorityText}>{priorityCount ? 'Review flagged students or missed doses first.' : 'Your screening and supplementation queues are clear.'}</Text>
           </View>
-        )}
+          <Pressable style={styles.priorityButton} onPress={() => setView('followup')}><Text style={styles.priorityButtonText}>{priorityCount ? 'Review' : 'Open queue'}</Text></Pressable>
+        </View>
 
-        {/* Tab 2: Follow-up Queue */}
-        {activeTab === 'followup' && (
-          <View style={styles.sectionContainer}>
-            <View style={styles.queueHeader}>
-              <View>
-                <Text style={styles.sectionHeading}>Students Needing Follow-up</Text>
-                <Text style={styles.muted}>Students flagged or with missed supplementation doses</Text>
-              </View>
-              <View style={styles.subTabs}>
-                <Pressable
-                  style={[styles.subTab, queueFilter === 'all' && styles.subTabActive]}
-                  onPress={() => setQueueFilter('all')}
-                >
-                  <Text style={[styles.subTabText, queueFilter === 'all' && styles.subTabTextActive]}>All ({followUpQueue.length})</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.subTab, queueFilter === 'flagged' && styles.subTabActive]}
-                  onPress={() => setQueueFilter('flagged')}
-                >
-                  <Text style={[styles.subTabText, queueFilter === 'flagged' && styles.subTabTextActive]}>
-                    Flagged ({followUpQueue.filter((s) => s.is_flagged).length})
-                  </Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.subTab, queueFilter === 'missed' && styles.subTabActive]}
-                  onPress={() => setQueueFilter('missed')}
-                >
-                  <Text style={[styles.subTabText, queueFilter === 'missed' && styles.subTabTextActive]}>
-                    Missed Doses ({followUpQueue.filter((s) => (s.missed_doses || 0) > 0).length})
-                  </Text>
-                </Pressable>
-              </View>
-            </View>
+        <View style={styles.viewTabs}>
+          <Tab label="Overview" active={view === 'overview'} onPress={() => setView('overview')} />
+          <Tab label={`Follow-up (${priorityCount})`} active={view === 'followup'} onPress={() => setView('followup')} />
+          <Tab label={`Hb records (${hbTests.length})`} active={view === 'hb'} onPress={() => setView('hb')} />
+        </View>
 
-            {filteredQueue.length ? (
-              filteredQueue.map((item) => (
-                <View key={item.student_id} style={styles.card}>
-                  <View style={styles.cardTop}>
-                    <View>
-                      <Text style={styles.studentName}>
-                        {item.first_name} {item.last_name}
-                      </Text>
-                      <Text style={styles.meta}>
-                        Roll {item.roll_number} • {classroomLabel(item)}
-                      </Text>
-                    </View>
-                    <View style={styles.badgeGroup}>
-                      {item.is_flagged && (
-                        <View style={styles.badgeRed}>
-                          <Text style={styles.badgeRedText}>⚑ Flagged</Text>
-                        </View>
-                      )}
-                      {(item.missed_doses || 0) > 0 && (
-                        <View style={styles.badgeOrange}>
-                          <Text style={styles.badgeOrangeText}>{item.missed_doses} missed doses</Text>
-                        </View>
-                      )}
-                    </View>
-                  </View>
+        {view === 'overview' ? (
+          <Overview summary={summary} classrooms={classrooms} hbTests={hbTests} screeningPercent={screeningPercent} screenedStudents={screenedStudents} onOpenClassroom={(id) => router.push(`/school/classrooms/${id}`)} onOpenStudent={(id) => router.push(`/school/students/${id}`)} />
+        ) : null}
 
-                  <View style={styles.studentStatsRow}>
-                    <Text style={styles.detailText}>
-                      Latest Hb: {item.latest_hb_level ? `${item.latest_hb_level} g/dL (${item.latest_hb_date})` : 'Not recorded'}
-                    </Text>
-                    <Text style={styles.detailText}>
-                      Doses taken: {item.taken_doses || 0}
-                    </Text>
-                  </View>
+        {view === 'followup' ? (
+          <FollowUpView queue={visibleFollowUp} allQueue={followUpQueue} classrooms={classrooms} search={search} setSearch={setSearch} selectedClassroom={selectedClassroom} setSelectedClassroom={setSelectedClassroom} busyStudentId={busyStudentId} onToggleFlag={toggleFlag} />
+        ) : null}
 
-                  <View style={styles.cardActions}>
-                    <Pressable
-                      disabled={busyStudentId === item.student_id}
-                      style={styles.actionBtn}
-                      onPress={() => toggleFlag(item.student_id, item.is_flagged)}
-                    >
-                      {busyStudentId === item.student_id ? (
-                        <ActivityIndicator size="small" />
-                      ) : (
-                        <Text style={styles.actionBtnText}>
-                          {item.is_flagged ? 'Remove flag' : 'Flag for follow-up'}
-                        </Text>
-                      )}
-                    </Pressable>
-                    <Pressable
-                      style={styles.actionBtnSecondary}
-                      onPress={() => router.push(`/school/students/${item.student_id}`)}
-                    >
-                      <Text style={styles.actionBtnSecondaryText}>View student details →</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ))
-            ) : (
-              <View style={styles.emptyCard}>
-                <Text style={styles.emptyText}>
-                  {followUpQueue.length ? 'No students match your filter.' : 'Great job! No students currently require follow-up.'}
-                </Text>
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* Tab 3: Classroom Breakdown */}
-        {activeTab === 'classrooms' && (
-          <View style={styles.sectionContainer}>
-            <Text style={styles.sectionHeading}>Classroom Performance & Status</Text>
-            {classrooms.length ? (
-              classrooms.map((c) => (
-                <View key={c.classroom_id} style={styles.card}>
-                  <View style={styles.cardTop}>
-                    <Text style={styles.studentName}>{classroomLabel(c)}</Text>
-                    <Pressable onPress={() => router.push(`/school/classrooms/${c.classroom_id}`)}>
-                      <Text style={styles.linkText}>View classroom →</Text>
-                    </Pressable>
-                  </View>
-
-                  <View style={styles.classGrid}>
-                    <View style={styles.classStat}>
-                      <Text style={styles.classStatLabel}>Students</Text>
-                      <Text style={styles.classStatVal}>{c.student_count || 0}</Text>
-                    </View>
-                    <View style={styles.classStat}>
-                      <Text style={styles.classStatLabel}>Flagged</Text>
-                      <Text style={[styles.classStatVal, { color: c.flagged_count > 0 ? '#b42318' : '#344054' }]}>
-                        {c.flagged_count || 0}
-                      </Text>
-                    </View>
-                    <View style={styles.classStat}>
-                      <Text style={styles.classStatLabel}>Courses</Text>
-                      <Text style={styles.classStatVal}>{c.course_count || 0}</Text>
-                    </View>
-                    <View style={styles.classStat}>
-                      <Text style={styles.classStatLabel}>Doses Taken</Text>
-                      <Text style={[styles.classStatVal, { color: '#027a48' }]}>{c.taken_doses || 0}</Text>
-                    </View>
-                    <View style={styles.classStat}>
-                      <Text style={styles.classStatLabel}>Doses Missed</Text>
-                      <Text style={[styles.classStatVal, { color: c.missed_doses > 0 ? '#b42318' : '#344054' }]}>
-                        {c.missed_doses || 0}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              ))
-            ) : (
-              <View style={styles.emptyCard}>
-                <Text style={styles.emptyText}>No classrooms registered yet.</Text>
-              </View>
-            )}
-          </View>
-        )}
+        {view === 'hb' ? (
+          <HbView tests={visibleHb} allTests={hbTests} classrooms={classrooms} search={search} setSearch={setSearch} selectedClassroom={selectedClassroom} setSelectedClassroom={setSelectedClassroom} onOpenStudent={(id) => router.push(`/school/students/${id}`)} />
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+function Overview({ summary, classrooms, hbTests, screeningPercent, screenedStudents, onOpenClassroom, onOpenStudent }) {
+  return (
+    <View style={styles.stack}>
+      <View style={styles.statsGrid}>
+        <Stat label="Students" value={summary.total_students || 0} hint="enrolled" />
+        <Stat label="Screened" value={`${screeningPercent}%`} hint={`${screenedStudents} students with Hb results`} />
+        <Stat label="Follow-up" value={summary.flagged_students || 0} hint="flagged students" tone={summary.flagged_students ? 'alert' : 'normal'} />
+        <Stat label="Adherence" value={summary.adherence_rate === null || summary.adherence_rate === undefined ? '—' : `${summary.adherence_rate}%`} hint="doses taken" tone="good" />
+      </View>
+
+      <SectionTitle title="Screening progress" hint="How many students have an Hb result" />
+      {classrooms.length ? classrooms.map((classroom) => {
+        const measured = hbTests.filter((test) => String(test.classroom_id) === String(classroom.classroom_id)).length;
+        const total = Number(classroom.student_count) || 0;
+        const percent = total ? Math.min(100, Math.round((measured / total) * 100)) : 0;
+        return <Pressable key={classroom.classroom_id} style={styles.progressCard} onPress={() => onOpenClassroom(classroom.classroom_id)}><View style={styles.progressTop}><View><Text style={styles.cardTitle}>{classroomLabel(classroom)}</Text><Text style={styles.muted}>{measured} of {total} students screened</Text></View><Text style={styles.progressPercent}>{percent}%</Text></View><View style={styles.track}><View style={[styles.fill, { width: `${percent}%` }]} /></View><Text style={styles.link}>Open classroom →</Text></Pressable>;
+      }) : <Empty title="No classrooms yet" text="Create a classroom to see screening progress." />}
+
+      <SectionTitle title="Supplementation snapshot" hint="The numbers that need attention" />
+      <View style={styles.snapshotCard}>
+        <SnapshotRow label="Active tablet courses" value={summary.active_courses || 0} />
+        <SnapshotRow label="Missed doses" value={summary.missed_doses || 0} tone={summary.missed_doses ? 'alert' : 'normal'} />
+        <SnapshotRow label="Upcoming doses" value={summary.upcoming_doses || 0} />
+      </View>
+
+      <SectionTitle title="Recent Hb records" hint="Latest screening results" />
+      {hbTests.slice(0, 5).map((test) => <Pressable key={test.test_id} style={styles.recordCard} onPress={() => onOpenStudent(test.student_id)}><View><Text style={styles.cardTitle}>{test.first_name} {test.last_name}</Text><Text style={styles.muted}>Roll {test.roll_number || '—'} · {test.test_date}</Text></View><Text style={styles.hbValue}>{test.hb_level} g/dL</Text></Pressable>)}
+      {!hbTests.length ? <Empty title="No Hb records yet" text="Assigned classroom teachers record Hb results from their teacher workspace." /> : null}
+    </View>
+  );
+}
+
+function FollowUpView({ queue, allQueue, classrooms, search, setSearch, selectedClassroom, setSelectedClassroom, busyStudentId, onToggleFlag }) {
+  return <View style={styles.stack}><SectionTitle title="Follow-up queue" hint="Flagged students and students with missed doses" /><FilterBar search={search} setSearch={setSearch} classrooms={classrooms} selectedClassroom={selectedClassroom} setSelectedClassroom={setSelectedClassroom} />{queue.length ? queue.map((item) => <View key={item.student_id} style={styles.followCard}><View style={styles.cardTop}><View><Text style={styles.cardTitle}>{item.first_name} {item.last_name}</Text><Text style={styles.muted}>Roll {item.roll_number || '—'} · {classroomLabel(item)}</Text></View><View style={styles.badges}>{item.is_flagged ? <Text style={styles.alertBadge}>Flagged</Text> : null}{item.missed_doses > 0 ? <Text style={styles.warningBadge}>{item.missed_doses} missed</Text> : null}</View></View><Text style={styles.detailText}>Latest Hb: {item.latest_hb_level ? `${item.latest_hb_level} g/dL (${item.latest_hb_date})` : 'Not recorded'}</Text><View style={styles.actionRow}><Pressable disabled={busyStudentId === item.student_id} style={styles.outlineAction} onPress={() => onToggleFlag(item.student_id, item.is_flagged)}><Text style={styles.outlineActionText}>{busyStudentId === item.student_id ? 'Saving…' : item.is_flagged ? 'Remove flag' : 'Flag student'}</Text></Pressable><Pressable onPress={() => router.push(`/school/students/${item.student_id}`)}><Text style={styles.link}>View profile →</Text></Pressable></View></View>) : <Empty title={allQueue.length ? 'No matches' : 'Nothing needs follow-up'} text={allQueue.length ? 'Try another search or classroom filter.' : 'There are no flagged students or missed doses right now.'} />}</View>;
+}
+
+function HbView({ tests, allTests, classrooms, search, setSearch, selectedClassroom, setSelectedClassroom, onOpenStudent }) {
+  return <View style={styles.stack}><SectionTitle title="Hb records" hint="Search results from student screenings" /><FilterBar search={search} setSearch={setSearch} classrooms={classrooms} selectedClassroom={selectedClassroom} setSelectedClassroom={setSelectedClassroom} />{tests.length ? tests.map((test) => <Pressable key={test.test_id} style={styles.recordCard} onPress={() => onOpenStudent(test.student_id)}><View><Text style={styles.cardTitle}>{test.first_name} {test.last_name}</Text><Text style={styles.muted}>Roll {test.roll_number || '—'} · {classroomLabel(test)} · {test.test_date}</Text></View><Text style={styles.hbValue}>{test.hb_level} g/dL</Text></Pressable>) : <Empty title={allTests.length ? 'No matching records' : 'No Hb records yet'} text={allTests.length ? 'Try another search or classroom filter.' : 'Records appear here after a screening is saved.'} />}</View>;
+}
+
+function FilterBar({ search, setSearch, classrooms, selectedClassroom, setSelectedClassroom }) {
+  return <><TextInput style={styles.search} placeholder="Search by student or roll number" placeholderTextColor={COLORS.muted} value={search} onChangeText={setSearch} /><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}><Pressable style={[styles.filterChip, !selectedClassroom && styles.filterChipActive]} onPress={() => setSelectedClassroom('')}><Text style={styles.filterText}>All classrooms</Text></Pressable>{classrooms.map((classroom) => <Pressable key={classroom.classroom_id} style={[styles.filterChip, selectedClassroom === String(classroom.classroom_id) && styles.filterChipActive]} onPress={() => setSelectedClassroom(String(classroom.classroom_id))}><Text style={styles.filterText}>{classroomLabel(classroom)}</Text></Pressable>)}</ScrollView></>;
+}
+
+function filterStudents(items, search, selectedClassroom) {
+  const query = search.trim().toLowerCase();
+  return items.filter((item) => {
+    if (selectedClassroom && String(item.classroom_id) !== selectedClassroom) return false;
+    if (!query) return true;
+    return `${item.first_name || ''} ${item.last_name || ''}`.toLowerCase().includes(query) || String(item.roll_number || '').includes(query);
+  });
+}
+
+function Tab({ label, active, onPress }) { return <Pressable style={[styles.tab, active && styles.tabActive]} onPress={onPress}><Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text></Pressable>; }
+function Stat({ label, value, hint, tone }) { return <View style={styles.statCard}><Text style={styles.statLabel}>{label}</Text><Text style={[styles.statValue, tone === 'alert' && styles.statAlert, tone === 'good' && styles.statGood]}>{value}</Text><Text style={styles.statHint}>{hint}</Text></View>; }
+function SectionTitle({ title, hint }) { return <View style={styles.sectionTitleRow}><Text style={styles.sectionHeading}>{title}</Text><Text style={styles.sectionHint}>{hint}</Text></View>; }
+function SnapshotRow({ label, value, tone }) { return <View style={styles.snapshotRow}><Text style={styles.snapshotLabel}>{label}</Text><Text style={[styles.snapshotValue, tone === 'alert' && styles.statAlert]}>{value}</Text></View>; }
+function Empty({ title, text }) { return <View style={styles.empty}><Text style={styles.emptyTitle}>{title}</Text><Text style={styles.muted}>{text}</Text></View>; }
+
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: '#f5f7fa' },
-  content: { width: '100%', maxWidth: 900, alignSelf: 'center', padding: 24, gap: 16 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 },
-  title: { fontSize: 26, fontWeight: '700' },
-  muted: { color: '#667085', fontSize: 13 },
-  nav: { flexDirection: 'row', gap: 16, alignItems: 'center' },
-  navLink: { color: '#1769aa', fontWeight: '700', fontSize: 14 },
-  logout: { color: '#b42318', fontWeight: '700', fontSize: 14 },
-  errorText: { color: '#b42318', backgroundColor: '#fef3f2', padding: 12, borderRadius: 8 },
-  messageText: { color: '#027a48', backgroundColor: '#edfcf2', padding: 12, borderRadius: 8 },
-
-  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  tab: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, backgroundColor: '#fff', borderWidth: 1, borderColor: '#eaecf0' },
-  tabActive: { backgroundColor: '#1769aa', borderColor: '#1769aa' },
-  tabText: { color: '#344054', fontSize: 14, fontWeight: '600' },
+  page: { flex: 1, backgroundColor: COLORS.background },
+  content: { width: '100%', maxWidth: 900, alignSelf: 'center', paddingHorizontal: 20, paddingBottom: 32, paddingTop: 8, gap: 14 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12, backgroundColor: COLORS.background, padding: 20 },
+  topBar: { minHeight: 52, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  back: { color: COLORS.primaryContainer, fontSize: 14, fontWeight: '700' },
+  topLabel: { color: COLORS.secondary, fontSize: 10, fontWeight: '700', letterSpacing: 1 },
+  hero: { backgroundColor: COLORS.low, borderRadius: 16, padding: 20 },
+  eyebrow: { color: COLORS.secondary, fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
+  title: { color: COLORS.primary, fontFamily: 'Georgia', fontSize: 29, lineHeight: 37, marginTop: 3 },
+  heroText: { color: COLORS.muted, fontSize: 14, lineHeight: 21, marginTop: 8 },
+  navRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 14 },
+  navLink: { color: COLORS.secondary, fontSize: 12, fontWeight: '700' },
+  errorText: { color: '#93000a', backgroundColor: '#ffdad6', padding: 12, borderRadius: 10 },
+  successText: { color: COLORS.tertiary, backgroundColor: COLORS.tertiaryFixed, padding: 12, borderRadius: 10 },
+  priorityCard: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, padding: 15 },
+  priorityCardAlert: { backgroundColor: '#ffdad6' },
+  priorityCardClear: { backgroundColor: COLORS.tertiaryFixed },
+  priorityIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: COLORS.surface, alignItems: 'center', justifyContent: 'center' },
+  priorityIconText: { color: COLORS.primary, fontSize: 18, fontWeight: '700' },
+  priorityCopy: { flex: 1 },
+  priorityTitle: { color: COLORS.text, fontSize: 14, fontWeight: '700' },
+  priorityText: { color: COLORS.muted, fontSize: 12, marginTop: 3 },
+  priorityButton: { backgroundColor: COLORS.primaryContainer, borderRadius: 9, paddingHorizontal: 12, paddingVertical: 9 },
+  priorityButtonText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  viewTabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  tab: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: '#ead8df', borderRadius: 10, paddingHorizontal: 13, paddingVertical: 10 },
+  tabActive: { backgroundColor: COLORS.primaryContainer, borderColor: COLORS.primaryContainer },
+  tabText: { color: COLORS.muted, fontSize: 12, fontWeight: '700' },
   tabTextActive: { color: '#fff' },
-
-  sectionContainer: { gap: 12 },
-  sectionHeading: { fontSize: 18, fontWeight: '700', color: '#101828' },
-
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  statBox: { flex: 1, minWidth: 160, backgroundColor: '#fff', borderRadius: 10, padding: 16, borderWidth: 1, borderColor: '#eaecf0' },
-  statLabel: { color: '#667085', fontSize: 13, fontWeight: '600' },
-  statNumber: { fontSize: 28, fontWeight: '700', marginTop: 4, color: '#101828' },
-  statSub: { color: '#667085', fontSize: 12, marginTop: 4 },
-
-  card: { backgroundColor: '#fff', borderRadius: 10, padding: 16, borderWidth: 1, borderColor: '#eaecf0', gap: 10 },
-  rowItem: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f2f4f7' },
-  rowLabel: { fontSize: 14, color: '#475467' },
-  rowValue: { fontSize: 14, fontWeight: '700', color: '#101828' },
-
-  queueHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
-  subTabs: { flexDirection: 'row', gap: 6 },
-  subTab: { paddingVertical: 5, paddingHorizontal: 10, borderRadius: 14, backgroundColor: '#f2f4f7' },
-  subTabActive: { backgroundColor: '#1769aa' },
-  subTabText: { fontSize: 12, color: '#344054', fontWeight: '600' },
-  subTabTextActive: { color: '#fff' },
-
-  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  studentName: { fontSize: 16, fontWeight: '700', color: '#101828' },
-  meta: { fontSize: 13, color: '#667085' },
-  badgeGroup: { flexDirection: 'row', gap: 6 },
-  badgeRed: { backgroundColor: '#fef3f2', paddingVertical: 3, paddingHorizontal: 8, borderRadius: 10 },
-  badgeRedText: { color: '#b42318', fontSize: 11, fontWeight: '700' },
-  badgeOrange: { backgroundColor: '#fffaeb', paddingVertical: 3, paddingHorizontal: 8, borderRadius: 10 },
-  badgeOrangeText: { color: '#b54708', fontSize: 11, fontWeight: '700' },
-
-  studentStatsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, marginVertical: 2 },
-  detailText: { fontSize: 13, color: '#475467' },
-
-  cardActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f2f4f7' },
-  actionBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: '#d0d5dd' },
-  actionBtnText: { fontSize: 12, fontWeight: '600', color: '#344054' },
-  actionBtnSecondary: { paddingVertical: 6 },
-  actionBtnSecondaryText: { fontSize: 13, fontWeight: '600', color: '#1769aa' },
-
-  linkText: { color: '#1769aa', fontSize: 13, fontWeight: '600' },
-  classGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 4 },
-  classStat: { flex: 1, minWidth: 90, backgroundColor: '#f9fafb', borderRadius: 8, padding: 10 },
-  classStatLabel: { fontSize: 11, color: '#667085', fontWeight: '600' },
-  classStatVal: { fontSize: 18, fontWeight: '700', marginTop: 2, color: '#101828' },
-
-  emptyCard: { backgroundColor: '#fff', borderRadius: 10, padding: 32, alignItems: 'center', borderWidth: 1, borderColor: '#eaecf0' },
-  emptyText: { color: '#667085', fontSize: 14 },
+  stack: { gap: 12 },
+  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  statCard: { flex: 1, minWidth: 145, backgroundColor: COLORS.surface, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#ead8df' },
+  statLabel: { color: COLORS.muted, fontSize: 12, fontWeight: '700' },
+  statValue: { color: COLORS.primary, fontSize: 26, fontWeight: '700', marginTop: 5 },
+  statHint: { color: COLORS.muted, fontSize: 11, lineHeight: 16, marginTop: 3 },
+  statAlert: { color: '#b42318' },
+  statGood: { color: COLORS.tertiary },
+  sectionTitleRow: { marginTop: 4, gap: 3 },
+  sectionHeading: { color: COLORS.text, fontSize: 18, fontWeight: '700' },
+  sectionHint: { color: COLORS.muted, fontSize: 12 },
+  progressCard: { backgroundColor: COLORS.surface, borderRadius: 14, padding: 15, borderWidth: 1, borderColor: '#ead8df', gap: 8 },
+  progressTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  cardTitle: { color: COLORS.text, fontSize: 15, fontWeight: '700' },
+  progressPercent: { color: COLORS.primary, fontSize: 18, fontWeight: '700' },
+  track: { height: 9, borderRadius: 5, backgroundColor: '#f2e4e9', overflow: 'hidden' },
+  fill: { height: '100%', backgroundColor: COLORS.primaryContainer, borderRadius: 5 },
+  link: { color: COLORS.secondary, fontSize: 12, fontWeight: '700' },
+  muted: { color: COLORS.muted, fontSize: 13, lineHeight: 18 },
+  snapshotCard: { backgroundColor: COLORS.surface, borderRadius: 14, paddingHorizontal: 16, borderWidth: 1, borderColor: '#ead8df' },
+  snapshotRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#f2e4e9' },
+  snapshotLabel: { color: COLORS.muted, fontSize: 13 },
+  snapshotValue: { color: COLORS.text, fontSize: 16, fontWeight: '700' },
+  recordCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, backgroundColor: COLORS.surface, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#ead8df' },
+  hbValue: { color: COLORS.primary, fontSize: 17, fontWeight: '700' },
+  search: { minHeight: 46, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.outlineVariant, borderRadius: 10, paddingHorizontal: 12, color: COLORS.text },
+  filterRow: { gap: 8, paddingVertical: 1 },
+  filterChip: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.outlineVariant, borderRadius: 16, paddingHorizontal: 11, paddingVertical: 8 },
+  filterChipActive: { backgroundColor: COLORS.secondaryFixed, borderColor: COLORS.secondary },
+  filterText: { color: COLORS.muted, fontSize: 12, fontWeight: '600' },
+  followCard: { backgroundColor: COLORS.surface, borderRadius: 14, padding: 15, borderWidth: 1, borderColor: '#ead8df', gap: 10 },
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  detailText: { color: COLORS.muted, fontSize: 13 },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, justifyContent: 'flex-end' },
+  alertBadge: { color: '#b42318', backgroundColor: '#ffdad6', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 4, fontSize: 11, fontWeight: '700' },
+  warningBadge: { color: '#b54708', backgroundColor: '#fffaeb', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 4, fontSize: 11, fontWeight: '700' },
+  actionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f2e4e9' },
+  outlineAction: { borderWidth: 1, borderColor: COLORS.outlineVariant, borderRadius: 9, paddingHorizontal: 11, paddingVertical: 8 },
+  outlineActionText: { color: COLORS.primary, fontSize: 12, fontWeight: '700' },
+  empty: { backgroundColor: COLORS.surface, borderRadius: 14, borderWidth: 1, borderColor: '#ead8df', padding: 25, alignItems: 'center', gap: 5 },
+  emptyTitle: { color: COLORS.text, fontSize: 16, fontWeight: '700' },
+  primaryButton: { backgroundColor: COLORS.primaryContainer, borderRadius: 10, paddingHorizontal: 15, paddingVertical: 11 },
+  primaryButtonText: { color: '#fff', fontSize: 13, fontWeight: '700' },
 });

@@ -1,6 +1,85 @@
-import { useState } from 'react';
-import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { router } from 'expo-router';
-import { requestSchoolPasswordReset } from './api';
-export default function ForgotPassword(){const[email,setEmail]=useState('');const[error,setError]=useState('');const[message,setMessage]=useState('');const[loading,setLoading]=useState(false);async function submit(){const value=email.trim().toLowerCase();if(!/^\S+@\S+\.\S+$/.test(value))return setError('Enter a valid email address.');if(loading)return;setLoading(true);setError('');try{await requestSchoolPasswordReset(value);router.push({pathname:'/school/reset-password',params:{email:value}})}catch(e){setError(e.message||'Unable to request password recovery.')}finally{setLoading(false)}}return <SafeAreaView style={s.page}><View style={s.card}><Text style={s.title}>Forgot password</Text><Text>Enter your School Admin email to receive a reset code.</Text><TextInput style={s.input} placeholder="Email" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={v=>{setEmail(v);setError('')}}/>{error&&<Text style={s.error}>{error}</Text>}{message&&<Text style={s.message}>{message}</Text>}<Pressable disabled={loading} style={s.button} onPress={submit}>{loading?<ActivityIndicator color="#fff"/>:<Text style={s.buttonText}>Send reset code</Text>}</Pressable><Pressable onPress={()=>router.replace('/school/login')}><Text style={s.link}>Back to sign in</Text></Pressable></View></SafeAreaView>}
-const s=StyleSheet.create({page:{flex:1,justifyContent:'center',backgroundColor:'#f5f7fa',padding:24},card:{backgroundColor:'#fff',padding:24,borderRadius:14,gap:12,maxWidth:480,width:'100%',alignSelf:'center'},title:{fontSize:28,fontWeight:'700'},input:{borderWidth:1,borderColor:'#d0d5dd',borderRadius:8,padding:13},button:{backgroundColor:'#1769aa',padding:14,borderRadius:8,alignItems:'center'},buttonText:{color:'#fff',fontWeight:'700'},error:{color:'#b42318'},message:{color:'#1769aa'},link:{color:'#1769aa',textAlign:'center',padding:8}});
+import { useEffect, useState } from 'react';
+import { Link, router } from 'expo-router';
+import { ActivityIndicator, Text, View } from 'react-native';
+import { requestSchoolPasswordReset } from '../../lib/school-api';
+import { AuthHeader, AuthLayout, ErrorText, FormCard, InfoCard, InputField, PrimaryButton, authStyles as styles } from '../../components/auth-ui';
+import { hasStoredSession } from '../../lib/navigation';
+
+export default function ForgotPassword() {
+  const [email, setEmail] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    hasStoredSession('token').then((hasSession) => {
+      if (!mounted) return;
+      if (hasSession) {
+        router.replace('/school/dashboard');
+        return;
+      }
+      setCheckingSession(false);
+    }).catch(() => {
+      if (mounted) setCheckingSession(false);
+    });
+    return () => { mounted = false; };
+  }, []);
+
+  async function submit() {
+    const value = email.trim().toLowerCase();
+    if (loading) return;
+    if (!/^\S+@\S+\.\S+$/.test(value)) {
+      setError('Enter a valid email address.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    try {
+      const result = await requestSchoolPasswordReset(value);
+      router.push({
+        pathname: '/school/reset-password',
+        params: { email: value, devOtp: result.otp || '' },
+      });
+    } catch (requestError) {
+      setError(requestError.message || 'Unable to request password recovery.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (checkingSession) {
+    return <View style={styles.profileLoading}><ActivityIndicator color="#59253e" /><Text style={styles.profileLoadingText}>Checking your session…</Text></View>;
+  }
+
+  return (
+    <AuthLayout>
+      <AuthHeader title="Password Recovery" onBack={() => router.replace('/school/login')} />
+      <Text style={styles.registrationBadge}>▣  Secure account access</Text>
+      <Text style={styles.registrationTitle}>Forgot password?</Text>
+      <Text style={styles.registrationText}>Enter your registered School Admin email and we’ll send a secure reset code.</Text>
+
+      <InfoCard icon="✓" title="Protected recovery">Your school health records remain private throughout the recovery process.</InfoCard>
+
+      <FormCard>
+        <InputField
+          label="Admin Email"
+          hint="Required"
+          icon="@"
+          value={email}
+          onChangeText={(value) => { setEmail(value); setError(''); }}
+          placeholder="admin@school.edu"
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoComplete="email"
+          editable={!loading}
+        />
+        <ErrorText>{error}</ErrorText>
+        <PrimaryButton label="Send Reset Code" loading={loading} onPress={submit} />
+      </FormCard>
+
+      <Text style={styles.recoveryFooter}>Remember your password? <Link href="/school/login" style={styles.footerLink}>Back to sign in</Link></Text>
+    </AuthLayout>
+  );
+}

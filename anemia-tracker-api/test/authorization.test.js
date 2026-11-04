@@ -159,6 +159,11 @@ async function createFixtures() {
     "INSERT INTO student_parents (student_id, parent_id, relationship, status) VALUES ($1, $2, $3, 'verified')",
     [studentA3.student_id, parentDoseOwner.parent_id, "guardian"]
   );
+  await pool.query(
+    "INSERT INTO school_parents (school_id, parent_id, status, accepted_at) VALUES ($1, $2, 'active', now()), ($1, $3, 'active', now())",
+    [schoolA.school_id, parentSameSchool.parent_id, parentDoseOwner.parent_id]
+  );
+  await pool.query("UPDATE parents SET phone_verified_at = now() WHERE parent_id = $1", [parentDoseOwner.parent_id]);
 
   const hbTest = await insertRow(
     "INSERT INTO hb_tests (student_id, test_date, hb_level, recorded_by) VALUES ($1, $2, $3, $4) RETURNING test_id",
@@ -205,6 +210,7 @@ async function cleanupFixtures() {
     ]);
   }
   if (fixtures.parents.length > 0) {
+    await pool.query("DELETE FROM school_parents WHERE parent_id = ANY($1::int[])", [fixtures.parents]);
     await pool.query("DELETE FROM parents WHERE parent_id = ANY($1::int[])", [
       fixtures.parents,
     ]);
@@ -309,8 +315,8 @@ test("school profile returns 404 for a nonexistent authenticated school", { skip
   const response = await request("/schools/me", {
     headers: authHeader({ role: "school", school_id: 2147483647 }),
   });
-  assert.equal(response.status, 404);
-  assert.deepEqual(response.body, { message: "School not found" });
+  assert.equal(response.status, 401);
+  assert.deepEqual(response.body, { message: "Invalid or expired token" });
 });
 
 test("school-parent migration preserves verified and pending link semantics", { skip: skipReason }, async () => {
@@ -322,7 +328,7 @@ test("school-parent migration preserves verified and pending link semantics", { 
 });
 
 test("student parent phone creates an immediately school-authorized link", { skip: skipReason }, async () => {
-  const phone = `+919876${String(Date.now()).slice(-6)}01`;
+  const phone = `+919876${String(Date.now()).slice(-6)}`;
   const created = await request("/students", {
     method: "POST",
     headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
@@ -364,7 +370,7 @@ test("school parent invitation is isolated and duplicate-safe", { skip: skipReas
   const response = await request("/school/parents/invitations", {
     method: "POST",
     headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
-    body: JSON.stringify({ phone_number: `+1999${Date.now()}` }),
+    body: JSON.stringify({ phone_number: `+919876${String(Date.now()).slice(-6)}` }),
   });
   assert.equal(response.status, 201);
   fixtures.parents.push(response.body.parent.parent_id);
@@ -494,6 +500,155 @@ test("classroom deletion preserves related records by refusing deletion", { skip
 });
 
 test(
+  "assigned teacher can view verified parent contacts without cross-school leakage",
+  { skip: skipReason },
+  async () => {
+    const own = await request(`/teacher/students/${fixtures.students[0]}`, {
+      headers: authHeader({
+        role: "teacher",
+        school_id: fixtures.schoolA.school_id,
+        teacher_id: fixtures.teacherA.teacher_id,
+      }),
+    });
+    assert.equal(own.status, 200);
+    assert.equal(own.body.student.parent_contacts.length, 1);
+    assert.equal(own.body.student.parent_contacts[0].relationship, "guardian");
+    assert.equal(Object.hasOwn(own.body.student.parent_contacts[0], "parent_id"), false);
+
+    const parentPhone = await pool.query(
+      "SELECT phone_number FROM parents WHERE parent_id = $1",
+      [fixtures.parents[0]]
+    );
+    assert.equal(own.body.student.parent_contacts[0].phone_number, parentPhone.rows[0].phone_number);
+
+    const missing = await request(`/teacher/students/${fixtures.students[1]}`, {
+      headers: authHeader({
+        role: "teacher",
+        school_id: fixtures.schoolA.school_id,
+        teacher_id: fixtures.teacherA.teacher_id,
+      }),
+    });
+    assert.equal(missing.status, 200);
+    assert.deepEqual(missing.body.student.parent_contacts, []);
+
+    const unauthenticated = await request(`/teacher/students/${fixtures.students[0]}`);
+    assert.equal(unauthenticated.status, 401);
+
+    const foreign = await request(`/teacher/students/${fixtures.students[3]}`, {
+      headers: authHeader({
+        role: "teacher",
+        school_id: fixtures.schoolA.school_id,
+        teacher_id: fixtures.teacherA.teacher_id,
+      }),
+    });
+    assert.equal(foreign.status, 404);
+  }
+);
+
+test(
+  "assigned teacher can view multiple verified parent contacts",
+  { skip: skipReason },
+  async () => {
+    await pool.query(
+      "INSERT INTO student_parents (student_id, parent_id, relationship, status, parent_accepted_at, school_confirmed_at) VALUES ($1, $2, $3, 'verified', now(), now())",
+      [fixtures.students[0], fixtures.parents[2], "guardian"]
+    );
+    try {
+      const response = await request(`/teacher/students/${fixtures.students[0]}`, {
+        headers: authHeader({
+          role: "teacher",
+          school_id: fixtures.schoolA.school_id,
+          teacher_id: fixtures.teacherA.teacher_id,
+        }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.body.student.parent_contacts.length, 2);
+      assert.equal(
+        response.body.student.parent_contacts.every((contact) => contact.phone_number && contact.relationship),
+        true
+      );
+    } finally {
+      await pool.query(
+        "DELETE FROM student_parents WHERE student_id = $1 AND parent_id = $2",
+        [fixtures.students[0], fixtures.parents[2]]
+      );
+    }
+  }
+);
+
+test(
+  "teacher endpoints enforce assigned classroom and role boundaries",
+  { skip: skipReason },
+  async () => {
+    const ownStudent = await request(`/teacher/students/${fixtures.students[0]}`, {
+      headers: authHeader({
+        role: "teacher",
+        school_id: fixtures.schoolA.school_id,
+        teacher_id: fixtures.teacherA.teacher_id,
+      }),
+    });
+    assert.equal(ownStudent.status, 200);
+
+    const foreignStudent = await request(`/teacher/students/${fixtures.students[3]}`, {
+      headers: authHeader({
+        role: "teacher",
+        school_id: fixtures.schoolA.school_id,
+        teacher_id: fixtures.teacherA.teacher_id,
+      }),
+    });
+    assert.equal(foreignStudent.status, 404);
+
+    const parentToken = await request("/teacher/students", {
+      headers: authHeader({ role: "parent", parent_id: fixtures.parents[0] }),
+    });
+    assert.equal(parentToken.status, 401);
+
+    const schoolToken = await request("/teacher/students", {
+      headers: authHeader({ role: "school", school_id: fixtures.schoolA.school_id }),
+    });
+    assert.equal(schoolToken.status, 401);
+
+    const malformedClassroom = await request("/teacher/classrooms/not-an-id", {
+      headers: authHeader({
+        role: "teacher",
+        school_id: fixtures.schoolA.school_id,
+        teacher_id: fixtures.teacherA.teacher_id,
+      }),
+    });
+    assert.equal(malformedClassroom.status, 400);
+  }
+);
+
+test(
+  "teacher Hb recording rejects empty, invalid, and impossible inputs",
+  { skip: skipReason },
+  async () => {
+    const headers = authHeader({
+      role: "teacher",
+      school_id: fixtures.schoolA.school_id,
+      teacher_id: fixtures.teacherA.teacher_id,
+    });
+    const invalidInputs = [
+      { hb_level: "", test_date: "2026-01-01" },
+      { hb_level: "   ", test_date: "2026-01-01" },
+      { hb_level: "not-a-number", test_date: "2026-01-01" },
+      { hb_level: -1, test_date: "2026-01-01" },
+      { hb_level: 0, test_date: "2026-01-01" },
+      { hb_level: 10.5, test_date: "2026-02-31" },
+    ];
+
+    for (const body of invalidInputs) {
+      const response = await request(`/students/${fixtures.students[0]}/hb-tests`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 400);
+    }
+  }
+);
+
+test(
   "same-school parent can be linked to another student in that school",
   { skip: skipReason },
   async () => {
@@ -593,7 +748,7 @@ test(
 );
 
 test(
-  "assigned teacher can mark a scheduled dose taken once",
+  "assigned teacher receives a clear conflict when dose attribution cannot be represented",
   { skip: skipReason },
   async () => {
     const dose = await insertRow(
@@ -609,9 +764,17 @@ test(
           teacher_id: fixtures.teacherA.teacher_id,
         }),
       });
-      assert.equal(response.status, 200);
-      assert.equal(response.body.tablet_dose.status, "taken");
-      assert.equal(response.body.tablet_dose.reported_by, fixtures.teacherA.teacher_id);
+      assert.equal(response.status, 409);
+      assert.equal(
+        response.body.message,
+        "Teacher dose recording is unavailable until the dose attribution schema supports teacher reporters"
+      );
+      const unchanged = await pool.query(
+        "SELECT status, reported_by FROM tablet_doses WHERE dose_id = $1",
+        [dose.dose_id]
+      );
+      assert.equal(unchanged.rows[0].status, "scheduled");
+      assert.equal(unchanged.rows[0].reported_by, null);
 
       const repeated = await request(`/teacher/tablet-doses/${dose.dose_id}/take`, {
         method: "POST",

@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE_URL } from './api-config';
 
-const API_BASE_URL = 'http://172.30.216.30:3000';
 export const SUPPORTED_GRADES = Array.from({ length: 12 }, (_, index) => `Class ${index + 1}`);
 
 export function suggestNextSectionLetter(existingSectionNames = []) {
@@ -9,9 +9,7 @@ export function suggestNextSectionLetter(existingSectionNames = []) {
     for (const name of existingSectionNames) {
       if (typeof name === 'string') {
         const clean = name.trim().toUpperCase();
-        if (/^[A-Z]$/.test(clean)) {
-          letters.add(clean);
-        }
+        if (/^[A-Z]$/.test(clean)) letters.add(clean);
       }
     }
   }
@@ -46,15 +44,15 @@ async function request(path, options = {}, isProtected = false) {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (response.status === 401) {
-        const error = new Error(
-          isProtected
-            ? 'Your session has expired. Please sign in again.'
-            : 'Your email or password is incorrect.'
-        );
+        const error = new Error(isProtected ? 'Your session has expired. Please sign in again.' : 'Your email or password is incorrect.');
         error.code = isProtected ? 'SESSION_EXPIRED' : 'INVALID_CREDENTIALS';
+        error.status = response.status;
         throw error;
       }
-      throw new Error(body.message || 'Something went wrong. Please try again.');
+      const error = new Error(body.message || 'Something went wrong. Please try again.');
+      error.code = body.code;
+      error.status = response.status;
+      throw error;
     }
     return body;
   } catch (error) {
@@ -74,6 +72,8 @@ export function requestSchoolPasswordReset(email) { return request('/schools/pas
 export function verifySchoolPasswordReset(email, otp) { return request('/schools/password-reset/verify', { method: 'POST', body: JSON.stringify({ email, otp }) }); }
 export function completeSchoolPasswordReset(resetToken, password) { return request('/schools/password-reset/complete', { method: 'POST', body: JSON.stringify({ ...(resetToken ? { reset_token: resetToken } : {}), password }) }); }
 export function getSchoolProfile(token) { return request('/schools/me', { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function updateSchoolProfile(token, data) { return request('/schools/me', { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
+export function changeSchoolPassword(token, currentPassword, newPassword) { return request('/schools/me/password', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }, true); }
 export function getTeachers(token) { return request('/teachers', { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function getTeacher(token, teacherId) { return request(`/teachers/${teacherId}`, { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function getClassrooms(token) { return request('/classrooms', { headers: { Authorization: `Bearer ${token}` } }, true); }
@@ -111,21 +111,8 @@ export function getTabletCourseDoses(token, courseId) { return request(`/tablet-
 export function getSchoolTabletCourses(token) { return request('/school/tablet-courses', { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function getSchoolReports(token) { return request('/school/reports', { headers: { Authorization: `Bearer ${token}` } }, true); }
 
-
-export function getMyParentStudents(token) {
-  return request('/parents/me/students', {
-    headers: { Authorization: `Bearer ${token}` },
-  }, true);
-}
-
-export function getMyParentHbTests(token, studentId) {
-  return request(`/parents/me/students/${studentId}/hb-tests`, {
-    headers: { Authorization: `Bearer ${token}` },
-  }, true);
-}
-
-export function getMyParentTabletCourses(token, studentId) {
-  return request(`/parents/me/students/${studentId}/tablet-courses`, {
-    headers: { Authorization: `Bearer ${token}` },
-  }, true);
-}
+export function getMyParentStudents(token) { return request('/parents/me/students', { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getMyParentHbTests(token, studentId) { return request(`/parents/me/students/${studentId}/hb-tests`, { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getMyParentTabletCourses(token, studentId) { return request(`/parents/me/students/${studentId}/tablet-courses`, { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function getMyParentTabletDoses(token, studentId) { return request(`/students/${studentId}/tablet-doses`, { headers: { Authorization: `Bearer ${token}` } }, true); }
+export function markParentTabletDoseTaken(token, doseId) { return request(`/tablet-doses/${doseId}`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ status: 'taken' }) }, true); }

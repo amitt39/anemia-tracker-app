@@ -1,7 +1,109 @@
-import { useState } from 'react';
-import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useState } from 'react';
 import { Link, router, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { loginSchool } from './api';
-export default function Login() { const { reason } = useLocalSearchParams(); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [error, setError] = useState(reason === 'session_expired' ? 'Your session expired. Please sign in again.' : ''); const [loading, setLoading] = useState(false); async function submit() { if (!email.trim() || !password) { setError('Email and password are required.'); return; } setLoading(true); setError(''); try { const result = await loginSchool({ email: email.trim().toLowerCase(), password }); await AsyncStorage.setItem('token', result.token); await AsyncStorage.setItem('school_id', String(result.school_id)); router.replace('/school/dashboard'); } catch (e) { setError(e.message || 'Unable to sign in.'); } finally { setLoading(false); } } return <SafeAreaView style={styles.page}><View style={styles.card}><Text style={styles.title}>School sign in</Text><TextInput style={styles.input} placeholder="Email" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} /><TextInput style={styles.input} placeholder="Password" secureTextEntry value={password} onChangeText={setPassword} /><Text style={styles.error}>{error}</Text><Pressable style={styles.button} disabled={loading} onPress={submit}>{loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Sign in</Text>}</Pressable><Link href="/school/forgot-password" style={styles.link}>Forgot password?</Link><Link href="/school/register" style={styles.link}>Create a school account</Link><Link href="/teacher/login" style={styles.link}>Teacher sign in</Link></View></SafeAreaView>; }
-const styles = StyleSheet.create({ page: { flex: 1, backgroundColor: '#f5f7fa', justifyContent: 'center' }, card: { width: '90%', maxWidth: 480, alignSelf: 'center', backgroundColor: '#fff', padding: 24, borderRadius: 14 }, title: { fontSize: 28, fontWeight: '700', marginBottom: 20 }, input: { borderWidth: 1, borderColor: '#d0d5dd', borderRadius: 8, padding: 13, marginBottom: 12, fontSize: 16 }, error: { color: '#b42318', minHeight: 20 }, button: { backgroundColor: '#1769aa', padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 8 }, buttonText: { color: '#fff', fontWeight: '700' }, link: { color: '#1769aa', textAlign: 'center', marginTop: 18 } });
+import { ActivityIndicator, View, Text } from 'react-native';
+import { loginSchool } from '../../lib/school-api';
+import { AuthHeader, AuthLayout, ErrorText, FormCard, HintText, InfoCard, InputField, PrimaryButton, authStyles as styles } from '../../components/auth-ui';
+
+export default function Login() {
+  const { reason } = useLocalSearchParams();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState(reason === 'session_expired' ? 'Your session expired. Please sign in again.' : '');
+  const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    AsyncStorage.getItem('token').then((token) => {
+      if (!mounted) return;
+      if (token) {
+        router.replace('/school/dashboard');
+        return;
+      }
+      setCheckingSession(false);
+    }).catch(() => {
+      if (mounted) setCheckingSession(false);
+    });
+    return () => { mounted = false; };
+  }, []);
+
+  async function submit() {
+    if (loading) return;
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail || !password) {
+      setError('Email and password are required.');
+      return;
+    }
+    if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
+      setError('Enter a valid email address.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    try {
+      const result = await loginSchool({ email: normalizedEmail, password });
+      await AsyncStorage.setItem('token', result.token);
+      await AsyncStorage.setItem('school_id', String(result.school_id));
+      router.replace('/school/dashboard');
+    } catch (requestError) {
+      setError(requestError.code === 'SCHOOL_NOT_REGISTERED'
+        ? 'School not registered yet. Please register your school first.'
+        : (requestError.message || 'Unable to sign in. Please try again.'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (checkingSession) {
+    return <View style={styles.profileLoading}><ActivityIndicator color="#59253e" /><Text style={styles.profileLoadingText}>Checking your session…</Text></View>;
+  }
+
+  return (
+    <AuthLayout>
+      <AuthHeader title="Admin Login" onBack={() => router.replace('/role-selection')} />
+
+      <View style={styles.hero}>
+        <View style={styles.heroRow}>
+          <View style={styles.heroIcon}><Text style={styles.heroIconText}>▣</Text></View>
+          <View>
+            <Text style={styles.eyebrow}>Institutional Portal</Text>
+            <Text style={styles.heroTitle}>Welcome back</Text>
+          </View>
+        </View>
+        <Text style={styles.heroText}>Sign in to manage your school’s adolescent screening cohorts and hemoglobin health records.</Text>
+      </View>
+
+      <View style={styles.reminder}>
+        <Text style={styles.reminderIcon}>ⓘ</Text>
+        <Text style={styles.reminderText}>Looking for Teacher or Parent access? <Link href="/role-selection" style={styles.reminderLink}>Choose another role</Link>.</Text>
+      </View>
+
+      <FormCard>
+        <InputField label="Admin Email" hint="Official domain" icon="@" value={email} onChangeText={(value) => { setEmail(value); setError(''); }} placeholder="admin@oakridgehigh.edu" keyboardType="email-address" autoCapitalize="none" autoComplete="email" editable={!loading} />
+        <HintText positive>Use your registered school administrative email</HintText>
+        <InputField label="Password" hint="Secure portal" icon="▣" value={password} onChangeText={(value) => { setPassword(value); setError(''); }} placeholder="••••••••••••" secureTextEntry={!showPassword} onToggleSecure={() => setShowPassword((value) => !value)} autoComplete="password" editable={!loading} />
+        <HintText>Standard school board encrypted credentials</HintText>
+        <View style={styles.institutionBadge}>
+          <Text style={styles.institutionIcon}>✓</Text>
+          <View style={styles.institutionCopy}>
+            <Text style={styles.institutionTitle}>Verified school portal</Text>
+            <Text style={styles.institutionText}>Authorized administrative access</Text>
+          </View>
+        </View>
+        <ErrorText>{error}</ErrorText>
+        <PrimaryButton label="Sign In" loading={loading} onPress={submit} />
+        <Link href="/school/forgot-password" style={styles.inlineLink}>Forgot password?</Link>
+      </FormCard>
+
+      <InfoCard icon="♡" title="Term 2 Screening Cycle Active">Your school health workspace is ready for confidential hemoglobin tracking.</InfoCard>
+
+      <View style={styles.footerLinks}>
+        <Link href="/school/register" style={styles.footerLink}>Register Your School  ↗</Link>
+        <Link href="/role-selection" style={styles.footerMuted}>‹  Choose another role</Link>
+      </View>
+    </AuthLayout>
+  );
+}

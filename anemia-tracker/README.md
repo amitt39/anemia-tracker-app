@@ -10,7 +10,11 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    npm install
    ```
 
-2. Start the app
+2. Configure the API endpoint
+
+   Copy `.env.example` to `.env` and set `EXPO_PUBLIC_API_URL` to the reachable address of the Anemia Tracker API for your device or emulator.
+
+3. Start the app
 
    ```bash
    npx expo start

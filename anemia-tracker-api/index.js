@@ -8,6 +8,7 @@ const jwt = require("jsonwebtoken");
 const { Pool } = require("pg");
 const {
   createOtpRequestSuccessResponse,
+  canReturnDevelopmentOtp,
   getOtpCooldownState,
   isMockOtpSmsProviderEnabled,
   isValidPhoneNumber,
@@ -324,6 +325,121 @@ app.get("/schools/me", requireSchoolAuth, async (req, res, next) => {
   }
 });
 
+app.patch("/schools/me", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
+  const hasSchoolName = Object.prototype.hasOwnProperty.call(req.body, "school_name");
+  const hasEmail = Object.prototype.hasOwnProperty.call(req.body, "email");
+
+  if (!hasSchoolName && !hasEmail) {
+    return res.status(400).json({
+      message: "school_name or email is required",
+    });
+  }
+
+  const fields = [];
+  const values = [];
+
+  if (hasSchoolName) {
+    if (typeof req.body.school_name !== "string" || req.body.school_name.trim() === "") {
+      return res.status(400).json({ message: "School name is required" });
+    }
+    if (!requireMaxStringLength(res, "school_name", req.body.school_name, 100)) return;
+    fields.push(`school_name = $${values.length + 1}`);
+    values.push(req.body.school_name.trim());
+  }
+
+  if (hasEmail) {
+    if (typeof req.body.email !== "string" || req.body.email.trim() === "") {
+      return res.status(400).json({ message: "Email is required" });
+    }
+    const normalizedEmail = req.body.email.trim().toLowerCase();
+    if (!requireMaxStringLength(res, "email", normalizedEmail, 255)) return;
+    if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
+      return res.status(400).json({ message: "Please provide a valid email address" });
+    }
+    fields.push(`email = $${values.length + 1}`);
+    values.push(normalizedEmail);
+  }
+
+  values.push(req.school_id);
+
+  try {
+    const result = await pool.query(
+      `UPDATE schools SET ${fields.join(", ")} WHERE school_id = $${values.length}
+       RETURNING school_id, school_name, email, created_at`,
+      values
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "School not found" });
+    }
+
+    return res.status(200).json({
+      message: "School profile updated successfully",
+      school: result.rows[0],
+    });
+  } catch (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({ message: "Email already exists" });
+    }
+    return next(error);
+  }
+});
+
+app.post("/schools/me/password", requireSchoolAuth, requireJsonBody, async (req, res, next) => {
+  const { current_password, new_password } = req.body;
+
+  if (typeof current_password !== "string" || typeof new_password !== "string" || !current_password || !new_password) {
+    return res.status(400).json({
+      message: "current_password and new_password are required",
+    });
+  }
+
+  if (new_password.length < 8) {
+    return res.status(400).json({ message: "Password must be at least 8 characters" });
+  }
+
+  try {
+    const schoolResult = await pool.query(
+      "SELECT school_id, password_hash, session_version FROM schools WHERE school_id = $1",
+      [req.school_id]
+    );
+
+    if (schoolResult.rows.length === 0) {
+      return res.status(404).json({ message: "School not found" });
+    }
+
+    const school = schoolResult.rows[0];
+    const passwordMatches = await bcrypt.compare(current_password, school.password_hash);
+    if (!passwordMatches) {
+      return res.status(400).json({ message: "Current password is incorrect" });
+    }
+
+    const passwordHash = await bcrypt.hash(new_password, 10);
+    const result = await pool.query(
+      "UPDATE schools SET password_hash = $1, session_version = session_version + 1 WHERE school_id = $2 RETURNING session_version",
+      [passwordHash, req.school_id]
+    );
+
+    const token = jwt.sign(
+      {
+        school_id: school.school_id,
+        role: "school",
+        session_version: result.rows[0].session_version,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.status(200).json({
+      message: "Password updated successfully",
+      token,
+      school_id: school.school_id,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.post("/schools", requireJsonBody, async (req, res, next) => {
   const { school_name, email, password } = req.body;
   const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
@@ -419,8 +535,9 @@ app.post("/schools/login", schoolLoginLimiter, requireJsonBody, async (req, res,
     );
 
     if (result.rows.length === 0) {
-      return res.status(401).json({
-        message: "Invalid credentials",
+      return res.status(404).json({
+        code: "SCHOOL_NOT_REGISTERED",
+        message: "School not registered yet. Please register your school first.",
       });
     }
 
@@ -480,7 +597,8 @@ function getResetCookie(req) {
 app.post("/schools/password-reset/request", otpRequestLimiter, requireJsonBody, async (req, res, next) => {
   const email = typeof req.body.email === "string" ? req.body.email.trim().toLowerCase() : "";
   if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ message: "Enter a valid email address." });
-  if (!isEmailDeliveryConfigured()) return res.status(503).json({ message: "Password recovery email is currently unavailable." });
+  const developmentOtpEnabled = canReturnDevelopmentOtp();
+  if (!isEmailDeliveryConfigured() && !developmentOtpEnabled) return res.status(503).json({ message: "Password recovery email is currently unavailable." });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -491,9 +609,16 @@ app.post("/schools/password-reset/request", otpRequestLimiter, requireJsonBody, 
     const otp = String(crypto.randomInt(100000, 1000000));
     await client.query("UPDATE school_password_reset_challenges SET consumed_at = now() WHERE school_id = $1 AND consumed_at IS NULL", [school.rows[0].school_id]);
     const challenge = await client.query("INSERT INTO school_password_reset_challenges (school_id, otp_hash, expires_at, attempts_remaining) VALUES ($1, $2, now() + interval '5 minutes', 5) RETURNING challenge_id", [school.rows[0].school_id, hashResetValue(otp)]);
-    await sendPasswordResetEmail({ to: email, otp });
+    if (!developmentOtpEnabled) {
+      await sendPasswordResetEmail({ to: email, otp });
+    }
     await client.query("COMMIT");
-    return res.status(200).json({ message: resetOtpMessage(), challenge_id: challenge.rows[0].challenge_id, expires_in_seconds: 300 });
+    return res.status(200).json({
+      message: resetOtpMessage(),
+      challenge_id: challenge.rows[0].challenge_id,
+      expires_in_seconds: 300,
+      ...(developmentOtpEnabled ? { otp } : {}),
+    });
   } catch (error) { await client.query("ROLLBACK"); return next(error); } finally { client.release(); }
 });
 
@@ -732,7 +857,30 @@ app.get("/teacher/students/:student_id", requireTeacherAuth, async (req, res, ne
     if (result.rows.length === 0) {
       return res.status(404).json({ message: "Student not found or not assigned to you" });
     }
-    return res.status(200).json({ student: result.rows[0] });
+
+    const parentContacts = await pool.query(
+      `SELECT p.phone_number, sp.relationship
+       FROM student_parents sp
+       INNER JOIN parents p ON p.parent_id = sp.parent_id
+       INNER JOIN students s ON s.student_id = sp.student_id
+       INNER JOIN classrooms c ON c.classroom_id = s.classroom_id
+       INNER JOIN school_parents shp ON shp.parent_id = sp.parent_id AND shp.school_id = c.school_id
+       WHERE sp.student_id = $1
+         AND c.school_id = $2
+         AND c.teacher_id = $3
+         AND sp.status = 'verified'
+         AND shp.status = 'active'
+         AND p.status = 'active'
+       ORDER BY sp.created_at ASC`,
+      [req.params.student_id, req.school_id, req.teacher_id]
+    );
+
+    return res.status(200).json({
+      student: {
+        ...result.rows[0],
+        parent_contacts: parentContacts.rows,
+      },
+    });
   } catch (error) {
     return next(error);
   }
@@ -751,6 +899,25 @@ app.get("/teacher/students/:student_id/hb-tests", requireTeacherAuth, async (req
     const result = await pool.query(
       "SELECT test_id, student_id, test_date, hb_level, recorded_by, created_at FROM hb_tests WHERE student_id = $1 ORDER BY test_date DESC, created_at DESC",
       [req.params.student_id]
+    );
+    return res.status(200).json({ hb_tests: result.rows });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/teacher/hb-tests", requireTeacherAuth, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT h.test_id, h.student_id, h.test_date, h.hb_level, h.recorded_by, h.created_at,
+              s.first_name, s.last_name, s.roll_number,
+              c.classroom_id, c.class_name, c.grade_name, c.section_name
+       FROM hb_tests h
+       INNER JOIN students s ON h.student_id = s.student_id
+       INNER JOIN classrooms c ON s.classroom_id = c.classroom_id
+       WHERE c.school_id = $1 AND c.teacher_id = $2
+       ORDER BY h.test_date DESC, h.created_at DESC, s.last_name ASC, s.first_name ASC`,
+      [req.school_id, req.teacher_id]
     );
     return res.status(200).json({ hb_tests: result.rows });
   } catch (error) {
@@ -802,41 +969,54 @@ app.get("/teacher/students/:student_id/tablet-doses", requireTeacherAuth, async 
   }
 });
 
+app.get("/teacher/tablet-doses", requireTeacherAuth, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT td.dose_id, td.course_id, td.scheduled_date, td.status, td.taken_at, td.reported_by,
+              tc.start_date, tc.end_date,
+              s.student_id, s.first_name, s.last_name, s.roll_number,
+              c.classroom_id, c.class_name, c.grade_name, c.section_name
+       FROM tablet_doses td
+       INNER JOIN tablet_courses tc ON td.course_id = tc.course_id
+       INNER JOIN students s ON tc.student_id = s.student_id
+       INNER JOIN classrooms c ON s.classroom_id = c.classroom_id
+       WHERE c.school_id = $1 AND c.teacher_id = $2
+       ORDER BY td.scheduled_date ASC, s.last_name ASC, s.first_name ASC`,
+      [req.school_id, req.teacher_id]
+    );
+    return res.status(200).json({ tablet_doses: result.rows });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 app.post("/teacher/tablet-doses/:dose_id/take", requireTeacherAuth, async (req, res, next) => {
   if (!requirePositiveIntegerParam(req, res, "dose_id")) return;
   try {
-    const result = await pool.query(
-      `UPDATE tablet_doses td
-       SET status = 'taken', taken_at = now(), reported_by = $1
-       FROM tablet_courses tc
+    const dose = await pool.query(
+      `SELECT td.status
+       FROM tablet_doses td
+       INNER JOIN tablet_courses tc ON tc.course_id = td.course_id
        INNER JOIN students s ON s.student_id = tc.student_id
        INNER JOIN classrooms c ON c.classroom_id = s.classroom_id
-       WHERE td.course_id = tc.course_id
-         AND td.dose_id = $2
-         AND td.status = 'scheduled'
-         AND c.school_id = $3
-         AND c.teacher_id = $1
-       RETURNING td.dose_id, td.course_id, td.scheduled_date, td.status, td.taken_at, td.reported_by`,
-      [Number(req.teacher_id), Number(req.params.dose_id), Number(req.school_id)]
+       WHERE td.dose_id = $1 AND c.school_id = $2 AND c.teacher_id = $3`,
+      [Number(req.params.dose_id), Number(req.school_id), Number(req.teacher_id)]
     );
 
-    if (result.rows.length === 0) {
-      const dose = await pool.query(
-        `SELECT td.status
-         FROM tablet_doses td
-         INNER JOIN tablet_courses tc ON tc.course_id = td.course_id
-         INNER JOIN students s ON s.student_id = tc.student_id
-         INNER JOIN classrooms c ON c.classroom_id = s.classroom_id
-         WHERE td.dose_id = $1 AND c.school_id = $2 AND c.teacher_id = $3`,
-        [Number(req.params.dose_id), Number(req.school_id), Number(req.teacher_id)]
-      );
-      if (dose.rows.length > 0 && dose.rows[0].status !== 'scheduled') {
-        return res.status(409).json({ message: 'Tablet dose has already been taken.' });
-      }
+    if (dose.rows.length === 0) {
       return res.status(404).json({ message: 'Tablet dose not found or not assigned to you.' });
     }
 
-    return res.status(200).json({ tablet_dose: result.rows[0] });
+    if (dose.rows[0].status !== 'scheduled') {
+      return res.status(409).json({ message: 'Tablet dose has already been taken.' });
+    }
+
+    // The current schema only permits a parent ID in reported_by, so do not
+    // mutate the dose or misattribute a teacher action until that contract is
+    // resolved at the schema/product level.
+    return res.status(409).json({
+      message: "Teacher dose recording is unavailable until the dose attribution schema supports teacher reporters",
+    });
   } catch (error) {
     return next(error);
   }
@@ -2169,42 +2349,16 @@ app.post(
       });
     }
 
-    if (
-      !Number.isInteger(Number(req.teacher_id)) ||
-      Number(req.teacher_id) <= 0
-    ) {
-      return res.status(401).json({
-        message: "Authenticated teacher is required to record Hb tests",
-      });
-    }
-
     try {
-      // Verify student ownership
-      const studentQuery =
-        req.auth_role === "teacher"
-          ? "SELECT s.student_id FROM students s INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE s.student_id = $1 AND c.school_id = $2 AND c.teacher_id = $3"
-          : "SELECT s.student_id FROM students s INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE s.student_id = $1 AND c.school_id = $2";
-      const studentParams =
-        req.auth_role === "teacher"
-          ? [Number(req.params.student_id), req.school_id, Number(req.teacher_id)]
-          : [Number(req.params.student_id), req.school_id];
-      const studentResult = await pool.query(studentQuery, studentParams);
+      // Verify the student belongs to the authenticated teacher's classroom.
+      const studentResult = await pool.query(
+        "SELECT s.student_id FROM students s INNER JOIN classrooms c ON s.classroom_id = c.classroom_id WHERE s.student_id = $1 AND c.school_id = $2 AND c.teacher_id = $3",
+        [Number(req.params.student_id), req.school_id, Number(req.teacher_id)]
+      );
 
       if (studentResult.rows.length === 0) {
         return res.status(404).json({
-          message: "Student not found",
-        });
-      }
-
-      // Verify teacher ownership
-      const teacherResult = await pool.query(
-        "SELECT teacher_id FROM teachers WHERE teacher_id = $1 AND school_id = $2",
-        [Number(req.teacher_id), req.school_id]
-      );
-
-      if (teacherResult.rows.length === 0) {
-        return res.status(400).json({
-          message: "Authenticated teacher must belong to this school",
+          message: "Student not found or not assigned to you",
         });
       }
 

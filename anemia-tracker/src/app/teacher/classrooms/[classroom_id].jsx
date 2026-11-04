@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -16,7 +17,8 @@ import {
   getTeacherClassroom,
   getTeacherClassroomStudents,
   getTeacherSession,
-} from '../api';
+} from '../../../lib/teacher-api';
+import { AUTH } from '../../../components/auth-ui';
 
 export default function TeacherClassroomDetail() {
   const { classroom_id } = useLocalSearchParams();
@@ -26,6 +28,7 @@ export default function TeacherClassroomDetail() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
 
   const loadData = useCallback(async (authToken) => {
     try {
@@ -68,11 +71,37 @@ export default function TeacherClassroomDetail() {
     await loadData(token);
   }
 
+  const filteredStudents = useMemo(() => {
+    if (!search.trim()) return students;
+    const query = search.trim().toLowerCase();
+    return students.filter((student) => `${student.first_name || ''} ${student.last_name || ''}`.toLowerCase().includes(query) || String(student.roll_number || '').includes(query));
+  }, [students, search]);
+
+  async function retry() {
+    if (!token) return;
+    setLoading(true);
+    await loadData(token);
+  }
+
   if (loading) {
     return (
       <SafeAreaView style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#1565c0" />
+        <ActivityIndicator size="large" color={AUTH.secondary} />
         <Text style={styles.loadingText}>Loading classroom...</Text>
+      </SafeAreaView>
+    );
+  }
+
+  if (!classroom && error) {
+    return (
+      <SafeAreaView style={styles.centerContainer}>
+        <Text style={styles.errorText}>{error}</Text>
+        <Pressable style={styles.retryButton} onPress={retry}>
+          <Text style={styles.retryText}>Retry</Text>
+        </Pressable>
+        <Pressable style={styles.backBtn} onPress={() => router.push('/teacher/classrooms')}>
+          <Text style={styles.backBtnText}>Back to Classrooms</Text>
+        </Pressable>
       </SafeAreaView>
     );
   }
@@ -97,6 +126,7 @@ export default function TeacherClassroomDetail() {
         {error ? (
           <View style={styles.errorBox}>
             <Text style={styles.errorText}>{error}</Text>
+            <Pressable style={styles.retryButton} onPress={retry}><Text style={styles.retryText}>Retry</Text></Pressable>
           </View>
         ) : null}
 
@@ -126,16 +156,18 @@ export default function TeacherClassroomDetail() {
             Tap a student to record Hb measurements or view tablet course history.
           </Text>
 
-          {students.length === 0 ? (
+          <TextInput style={styles.searchInput} placeholder="Search this classroom by name or roll number" value={search} onChangeText={setSearch} />
+
+          {filteredStudents.length === 0 ? (
             <View style={styles.emptyCard}>
-              <Text style={styles.emptyTitle}>No Students in This Class</Text>
+              <Text style={styles.emptyTitle}>{students.length ? 'No matching students' : 'No Students in This Class'}</Text>
               <Text style={styles.emptyText}>
-                There are no students assigned to this section yet.
+                {students.length ? 'Try a different search.' : 'There are no students assigned to this section yet.'}
               </Text>
             </View>
           ) : (
             <View style={styles.rosterCard}>
-              {students.map((student) => (
+              {filteredStudents.map((student) => (
                 <Pressable
                   key={student.student_id}
                   style={styles.rosterRow}
@@ -175,11 +207,11 @@ export default function TeacherClassroomDetail() {
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    backgroundColor: '#f5f7fa',
+    backgroundColor: AUTH.background,
   },
   centerContainer: {
     flex: 1,
-    backgroundColor: '#f5f7fa',
+    backgroundColor: AUTH.background,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
@@ -187,7 +219,7 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 12,
     fontSize: 16,
-    color: '#667085',
+    color: AUTH.muted,
   },
   scrollContent: {
     padding: 16,
@@ -203,13 +235,13 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     paddingVertical: 6,
     paddingHorizontal: 10,
-    backgroundColor: '#fff',
+    backgroundColor: AUTH.surface,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#d0d5dd',
+    borderColor: AUTH.outlineVariant,
   },
   backBtnText: {
-    color: '#344054',
+    color: AUTH.muted,
     fontSize: 13,
     fontWeight: '600',
   },
@@ -223,25 +255,39 @@ const styles = StyleSheet.create({
     color: '#b42318',
     fontSize: 14,
   },
+  retryButton: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    backgroundColor: AUTH.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: AUTH.outlineVariant,
+  },
+  retryText: {
+    color: '#93000a',
+    fontWeight: '700',
+  },
   headerCard: {
-    backgroundColor: '#fff',
+    backgroundColor: AUTH.surface,
     padding: 20,
     borderRadius: 12,
     marginBottom: 20,
     borderWidth: 1,
-    borderColor: '#eaecf0',
+    borderColor: AUTH.outlineVariant,
   },
   headerBadge: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#1565c0',
+    color: AUTH.secondary,
     textTransform: 'uppercase',
     marginBottom: 4,
   },
   headerTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#1a1a1a',
+    color: AUTH.primary,
   },
   headerMetaRow: {
     flexDirection: 'row',
@@ -252,7 +298,7 @@ const styles = StyleSheet.create({
   },
   metaText: {
     fontSize: 14,
-    color: '#667085',
+    color: AUTH.muted,
   },
   flaggedBadge: {
     backgroundColor: '#fee4e2',
@@ -271,19 +317,29 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#1a1a1a',
+    color: AUTH.primary,
   },
   sectionSubtitle: {
     fontSize: 13,
-    color: '#667085',
+    color: AUTH.muted,
     marginTop: 2,
     marginBottom: 12,
   },
+  searchInput: {
+    backgroundColor: AUTH.surface,
+    borderWidth: 1,
+    borderColor: AUTH.outlineVariant,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    marginBottom: 12,
+  },
   rosterCard: {
-    backgroundColor: '#fff',
+    backgroundColor: AUTH.surface,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#e4e7ec',
+    borderColor: AUTH.outlineVariant,
     overflow: 'hidden',
   },
   rosterRow: {
@@ -305,7 +361,7 @@ const styles = StyleSheet.create({
   rollText: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#344054',
+    color: AUTH.muted,
   },
   studentInfo: {
     flex: 1,
@@ -318,7 +374,7 @@ const styles = StyleSheet.create({
   studentName: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#101828',
+    color: AUTH.primary,
   },
   inlineFlag: {
     backgroundColor: '#fee4e2',
@@ -333,32 +389,32 @@ const styles = StyleSheet.create({
   },
   subtext: {
     fontSize: 12,
-    color: '#667085',
+    color: AUTH.muted,
     marginTop: 2,
   },
   chevron: {
     fontSize: 13,
-    color: '#1565c0',
+    color: AUTH.secondary,
     fontWeight: '600',
     marginLeft: 8,
   },
   emptyCard: {
-    backgroundColor: '#fff',
+    backgroundColor: AUTH.surface,
     padding: 24,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#eaecf0',
+    borderColor: AUTH.outlineVariant,
     alignItems: 'center',
   },
   emptyTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#344054',
+    color: AUTH.muted,
     marginBottom: 4,
   },
   emptyText: {
     fontSize: 13,
-    color: '#667085',
+    color: AUTH.muted,
     textAlign: 'center',
   },
 });

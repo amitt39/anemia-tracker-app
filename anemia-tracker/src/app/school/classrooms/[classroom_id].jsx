@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { clearSchoolSession, createClassroom, deleteClassroom, getClassroom, getClassroomStudents, getClassrooms, getTeachers, suggestNextSectionLetter, updateClassroom } from '../api';
+import { clearSchoolSession, createClassroom, deleteClassroom, getClassroom, getClassroomStudents, getClassrooms, getTeachers, suggestNextSectionLetter, updateClassroom } from '../../../lib/school-api';
 
 const defaults = ['A', 'B', 'C', 'D'];
 const labelFor = (x) => (x?.grade_name && x?.section_name ? `${x.grade_name} – ${x.section_name}` : `Legacy: ${x?.class_name || 'classroom'}`);
 
 export default function ClassroomDetails() {
-  const { classroom_id: id } = useLocalSearchParams();
+  const { classroom_id: id, return_to: returnToParam } = useLocalSearchParams();
+  const returnTo = Array.isArray(returnToParam) ? returnToParam[0] : returnToParam;
   const [token, setToken] = useState('');
   const [item, setItem] = useState(null);
   const [allClassrooms, setAllClassrooms] = useState([]);
@@ -32,16 +33,16 @@ export default function ClassroomDetails() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  async function expire(e) {
+  const expire = useCallback(async (e) => {
     if (e.code === 'SESSION_EXPIRED') {
       await clearSchoolSession();
       router.replace('/school/login?reason=session_expired');
       return true;
     }
     return false;
-  }
+  }, []);
 
-  async function load(value) {
+  const load = useCallback(async (value) => {
     const [c, s, t, ac] = await Promise.all([
       getClassroom(value, id),
       getClassroomStudents(value, id),
@@ -57,14 +58,9 @@ export default function ClassroomDetails() {
     setStudents(s.students || []);
     setTeachers(t.teachers || []);
     setAllClassrooms(ac.classrooms || []);
-  }
+  }, [id]);
 
   useEffect(() => {
-    setError('');
-    setSuccess('');
-    setShowAddSection(false);
-    setNewSectionDraft('');
-    setNewTeacherId(null);
     AsyncStorage.getItem('token').then(async (value) => {
       if (!value) return router.replace('/school/login');
       setToken(value);
@@ -76,7 +72,7 @@ export default function ClassroomDetails() {
         setLoading(false);
       }
     });
-  }, [id]);
+  }, [expire, id, load]);
 
   const sectionsInGrade = item?.grade_name ? allClassrooms.filter((c) => c.grade_name === item.grade_name) : [];
   const existingSectionNames = sectionsInGrade.map((c) => c.section_name).filter(Boolean);
@@ -127,6 +123,10 @@ export default function ClassroomDetails() {
     try {
       await updateClassroom(token, id, payload);
       await load(token);
+      if (returnTo) {
+        router.replace(returnTo);
+        return;
+      }
       setSuccess('Classroom changes saved successfully.');
     } catch (e) {
       if (!(await expire(e))) setError(e.message || 'Unable to save classroom changes.');
@@ -200,9 +200,26 @@ export default function ClassroomDetails() {
   return (
     <SafeAreaView style={styles.page}>
       <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.topBar}>
+          <Pressable onPress={() => router.push('/school/classrooms')}><Text style={styles.back}>‹  Classroom directory</Text></Pressable>
+          <Text style={styles.topLabel}>SCHOOL ADMIN</Text>
+        </View>
         <View style={styles.card}>
-          <Text style={styles.title}>Section Management</Text>
-          <Text style={styles.subtitle}>{labelFor(item)}</Text>
+          <View style={styles.hero}>
+            <View style={styles.classMark}><Text style={styles.classMarkText}>{(item.section_name || item.class_name || 'CL').slice(0, 2).toUpperCase()}</Text></View>
+            <View style={styles.heroCopy}>
+              <Text style={styles.eyebrow}>School structure</Text>
+              <Text style={styles.title}>{labelFor(item)}</Text>
+              <Text style={styles.heroText}>Manage this section, its primary teacher, and enrolled students.</Text>
+            </View>
+          </View>
+
+          <View style={styles.navRow}>
+            <Pressable onPress={() => router.push('/school/students')}><Text style={styles.navLink}>Students</Text></Pressable>
+            <Pressable onPress={() => router.push('/school/teachers')}><Text style={styles.navLink}>Teachers</Text></Pressable>
+            <Pressable onPress={() => router.push('/school/reports')}><Text style={styles.navLink}>Reports</Text></Pressable>
+            <Pressable onPress={() => router.push('/school/profile')}><Text style={styles.navLink}>Profile</Text></Pressable>
+          </View>
 
           {/* Section switcher for same grade */}
           {sectionsInGrade.length > 1 ? (
@@ -441,36 +458,46 @@ function Back() {
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: '#f5f7fa' },
-  content: { width: '100%', maxWidth: 650, alignSelf: 'center', padding: 24 },
-  card: { backgroundColor: '#fff', borderRadius: 14, padding: 24, gap: 14 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  title: { fontSize: 28, fontWeight: '700' },
-  subtitle: { color: '#667085', marginTop: 2, marginBottom: 8 },
+  page: { flex: 1, backgroundColor: '#fcf9f4' },
+  content: { width: '100%', maxWidth: 720, alignSelf: 'center', paddingHorizontal: 20, paddingBottom: 32, gap: 14 },
+  card: { backgroundColor: '#fff', borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: '#ead8df' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10, backgroundColor: '#fcf9f4' },
+  topBar: { minHeight: 52, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  back: { color: '#743b55', fontSize: 14, fontWeight: '700' },
+  topLabel: { color: '#97425d', fontSize: 10, fontWeight: '700', letterSpacing: 1 },
+  hero: { flexDirection: 'row', alignItems: 'center', gap: 13, backgroundColor: '#f6f3ee', borderRadius: 14, padding: 16 },
+  classMark: { width: 48, height: 48, borderRadius: 15, backgroundColor: '#ffd9e1', alignItems: 'center', justifyContent: 'center' },
+  classMarkText: { color: '#59253e', fontSize: 14, fontWeight: '700' },
+  heroCopy: { flex: 1 },
+  eyebrow: { color: '#97425d', fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
+  title: { color: '#59253e', fontFamily: 'Georgia', fontSize: 26, lineHeight: 34, marginTop: 2 },
+  heroText: { color: '#514348', fontSize: 13, lineHeight: 19, marginTop: 4 },
+  navRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 14 },
+  navLink: { color: '#97425d', fontSize: 12, fontWeight: '700' },
   sectionBlock: { gap: 6 },
-  subheading: { fontSize: 16, fontWeight: '700', color: '#101828' },
-  label: { fontWeight: '700', marginTop: 8, color: '#344054' },
+  subheading: { fontSize: 16, fontWeight: '700', color: '#59253e' },
+  label: { fontWeight: '700', marginTop: 8, color: '#1c1c19' },
   choices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
-  choice: { borderWidth: 1, borderColor: '#d0d5dd', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#fff' },
-  selected: { backgroundColor: '#dbeafe', borderColor: '#1769aa' },
-  input: { borderWidth: 1, borderColor: '#d0d5dd', borderRadius: 8, padding: 12, marginTop: 4, backgroundColor: '#fff' },
-  button: { backgroundColor: '#1769aa', borderRadius: 8, padding: 14, marginTop: 6, alignItems: 'center' },
+  choice: { borderWidth: 1, borderColor: '#d5c2c7', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#fff' },
+  selected: { backgroundColor: '#ffd9e1', borderColor: '#97425d' },
+  input: { borderWidth: 1, borderColor: '#d5c2c7', borderRadius: 10, padding: 12, marginTop: 4, backgroundColor: '#fff' },
+  button: { backgroundColor: '#59253e', borderRadius: 10, padding: 14, marginTop: 6, alignItems: 'center' },
   buttonText: { color: '#fff', fontWeight: '700' },
   disabled: { opacity: 0.6 },
-  outlineButton: { borderWidth: 1, borderColor: '#1769aa', borderRadius: 8, padding: 12, alignItems: 'center', marginTop: 8 },
-  outlineButtonText: { color: '#1769aa', fontWeight: '700' },
+  outlineButton: { borderWidth: 1, borderColor: '#97425d', borderRadius: 10, padding: 12, alignItems: 'center', marginTop: 8 },
+  outlineButtonText: { color: '#97425d', fontWeight: '700' },
   addSectionContainer: { marginTop: 4 },
-  addSectionBox: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#eaecf0', borderRadius: 10, padding: 16, gap: 10 },
+  addSectionBox: { backgroundColor: '#f6f3ee', borderWidth: 1, borderColor: '#ead8df', borderRadius: 12, padding: 16, gap: 10 },
   addSectionActions: { flexDirection: 'row', gap: 10, marginTop: 8 },
-  smallAddButton: { backgroundColor: '#1769aa', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 16, alignItems: 'center' },
+  smallAddButton: { backgroundColor: '#743b55', borderRadius: 9, paddingVertical: 10, paddingHorizontal: 16, alignItems: 'center' },
   cancelButton: { borderWidth: 1, borderColor: '#d0d5dd', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
   cancelButtonText: { color: '#667085', fontWeight: '600' },
   delete: { borderWidth: 1, borderColor: '#b42318', padding: 13, borderRadius: 8, marginTop: 12, alignItems: 'center' },
   deleteText: { color: '#b42318', fontWeight: '600' },
-  row: { paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#eaecf0' },
-  helper: { color: '#667085', fontSize: 13 },
-  muted: { color: '#667085', marginTop: 2 },
+  row: { paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: '#f2e4e9', color: '#1c1c19' },
+  helper: { color: '#514348', fontSize: 13 },
+  muted: { color: '#514348', marginTop: 2 },
   error: { color: '#b42318', minHeight: 20, marginTop: 4 },
-  success: { color: '#027a48', minHeight: 20, marginTop: 4, fontWeight: '600' },
-  link: { color: '#1769aa', textAlign: 'center', marginTop: 14 },
+  success: { color: '#1d3d33', backgroundColor: '#c7eadc', borderRadius: 9, padding: 10, minHeight: 20, marginTop: 4, fontWeight: '600' },
+  link: { color: '#97425d', textAlign: 'center', marginTop: 14, fontWeight: '700' },
 });

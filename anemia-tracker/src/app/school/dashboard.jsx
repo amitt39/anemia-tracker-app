@@ -1,270 +1,275 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { clearSchoolSession, createClassroom, createStudent, createTeacher, getClassrooms, getSchoolProfile, getStudents, getTeachers, SUPPORTED_GRADES, suggestNextSectionLetter, updateClassroom, validateIndianMobileNumber } from './api';
+import { clearSchoolSession, getClassrooms, getHbTests, getSchoolProfile, getSchoolReports, getStudents, getTeachers } from '../../lib/school-api';
 
-const classroomLabel = (item) => item?.grade_name && item?.section_name ? `${item.grade_name} – ${item.section_name}` : `Legacy: ${item?.class_name || 'classroom'}`;
-const emptyStudent = { classroom_id: '', roll_number: '', first_name: '', last_name: '', parent_phone: '', relationship: '', relationship_description: '', parent_contact_unavailable: false };
-const emptyTeacher = { first_name: '', last_name: '', email: '', password: '' };
+const COLORS = {
+  background: '#fcf9f4',
+  surface: '#ffffff',
+  low: '#f6f3ee',
+  high: '#ebe8e3',
+  highest: '#e5e2dd',
+  primary: '#59253e',
+  primaryContainer: '#743b55',
+  secondary: '#97425d',
+  secondaryFixed: '#ffd9e1',
+  tertiary: '#1d3d33',
+  tertiaryFixed: '#c7eadc',
+  text: '#1c1c19',
+  muted: '#514348',
+  outline: '#837378',
+};
 
 export default function Dashboard() {
-  const [token, setToken] = useState(''); const [profile, setProfile] = useState(null); const [teachers, setTeachers] = useState([]); const [classrooms, setClassrooms] = useState([]); const [students, setStudents] = useState([]); const [active, setActive] = useState(''); const [message, setMessage] = useState(''); const [loading, setLoading] = useState(true); const [teacher, setTeacher] = useState(emptyTeacher); const [grade, setGrade] = useState(''); const [section, setSection] = useState(''); const [assignedTeacher, setAssignedTeacher] = useState(''); const [student, setStudent] = useState(emptyStudent); const [studentSearch, setStudentSearch] = useState(''); const [studentClassroom, setStudentClassroom] = useState('');
-  async function refresh(value) { const [p, t, c, s] = await Promise.all([getSchoolProfile(value), getTeachers(value), getClassrooms(value), getStudents(value)]); setProfile(p.school || null); setTeachers(t.teachers || []); setClassrooms(c.classrooms || []); setStudents(s.students || []); }
-  async function protectedError(error) { if (error.code === 'SESSION_EXPIRED') { await clearSchoolSession(); router.replace('/school/login?reason=session_expired'); return true; } return false; }
-  useEffect(() => { AsyncStorage.getItem('token').then(async (value) => { if (!value) return router.replace('/school/login'); setToken(value); try { await refresh(value); } catch (e) { if (!(await protectedError(e))) setMessage(e.message || 'Unable to load dashboard.'); } finally { setLoading(false); } }); }, []);
-  useFocusEffect(useCallback(() => { if (!token) return undefined; let mounted = true; refresh(token).catch(async (e) => { if (mounted && !(await protectedError(e))) setMessage(e.message || 'Unable to refresh dashboard.'); }); return () => { mounted = false; }; }, [token]));
-  function validateStudent() { if (!student.classroom_id || !student.roll_number || !student.first_name.trim() || !student.last_name.trim() || !Number.isInteger(Number(student.roll_number)) || Number(student.roll_number) <= 0 || student.first_name.trim().length > 50 || student.last_name.trim().length > 50) return 'Choose a class-section, enter a positive roll number, and provide names of 50 characters or fewer.'; if (student.parent_contact_unavailable) return ''; if (!student.parent_phone.trim()) return 'Enter a parent mobile number or select contact unavailable.'; const phone = validateIndianMobileNumber(student.parent_phone); if (!phone.valid) return phone.reason === 'prefix' ? 'Indian mobile numbers must start with 6, 7, 8, or 9.' : 'Enter a valid Indian mobile number.'; if (!student.relationship) return 'Choose the parent or guardian relationship.'; if (student.relationship === 'Other' && (!student.relationship_description.trim() || student.relationship_description.trim().length > 30)) return 'Enter an Other relationship of 30 characters or fewer.'; return ''; }
-  async function save(kind) { setMessage(''); if (kind === 'classroom') { const normalized = section.trim().toUpperCase(); if (!grade) return setMessage('Choose a class.'); if (!normalized) return setMessage('Section is required.'); if (!/^[A-Z0-9][A-Z0-9 ._-]*$/.test(normalized) || normalized.length > 20) return setMessage('Enter a valid section of 20 characters or fewer.'); if (classrooms.some((c) => c.grade_name === grade && c.section_name === normalized)) return setMessage(`That class and section already exists.`); try { await createClassroom(token, { grade_name: grade, section_name: normalized, ...(assignedTeacher ? { teacher_id: Number(assignedTeacher) } : {}) }); setGrade(''); setSection(''); setAssignedTeacher(''); } catch (e) { if (!(await protectedError(e))) return setMessage(e.message || 'Unable to create class-section.'); } } else if (kind === 'teacher') { try { await createTeacher(token, teacher); setTeacher(emptyTeacher); } catch (e) { if (!(await protectedError(e))) return setMessage(e.message || 'Unable to create teacher.'); } } else { const validation = validateStudent(); if (validation) return setMessage(validation); try { await createStudent(token, { classroom_id: Number(student.classroom_id), roll_number: Number(student.roll_number), first_name: student.first_name.trim(), last_name: student.last_name.trim(), parent_contact_unavailable: Boolean(student.parent_contact_unavailable), ...(!student.parent_contact_unavailable ? { parent_phone: student.parent_phone.trim(), relationship: student.relationship, relationship_description: student.relationship === 'Other' ? student.relationship_description.trim() : undefined } : {}) }); setStudent(emptyStudent); } catch (e) { if (!(await protectedError(e))) return setMessage(e.message || 'Unable to register student.'); } } try { await refresh(token); setActive(''); setMessage('Saved successfully.'); } catch (e) { if (!(await protectedError(e))) setMessage(e.message || 'Saved, but the dashboard could not refresh.'); } }
-  async function assign(classroomId, teacherId) { setMessage(''); try { await updateClassroom(token, classroomId, { teacher_id: teacherId }); await refresh(token); setMessage('Teacher assignment updated.'); } catch (e) { if (!(await protectedError(e))) setMessage(e.message || 'Unable to update teacher assignment.'); } }
-  if (loading) return <View style={styles.center}><ActivityIndicator /></View>;
-  const visible = students.filter((item) => (!studentSearch.trim() || `${item.first_name} ${item.last_name} ${item.roll_number}`.toLowerCase().includes(studentSearch.trim().toLowerCase())) && (!studentClassroom || String(item.classroom_id) === studentClassroom));
+  const { width } = useWindowDimensions();
+  const compact = width < 360;
+  const [token, setToken] = useState('');
+  const [profile, setProfile] = useState(null);
+  const [counts, setCounts] = useState({ students: null, teachers: null, classrooms: null });
+  const [teachers, setTeachers] = useState([]);
+  const [classrooms, setClassrooms] = useState([]);
+  const [hbTests, setHbTests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const refresh = useCallback(async (value) => {
+    const [profileResult, teachersResult, classroomsResult, studentsResult, reportsResult, hbResult] = await Promise.all([
+      getSchoolProfile(value),
+      getTeachers(value),
+      getClassrooms(value),
+      getStudents(value),
+      getSchoolReports(value),
+      getHbTests(value),
+    ]);
+    setProfile(profileResult.school || null);
+    setCounts({
+      students: Array.isArray(studentsResult.students) ? studentsResult.students.length : 0,
+      teachers: Array.isArray(teachersResult.teachers) ? teachersResult.teachers.length : 0,
+      classrooms: Array.isArray(classroomsResult.classrooms) ? classroomsResult.classrooms.length : 0,
+    });
+    setTeachers(Array.isArray(teachersResult.teachers) ? teachersResult.teachers : []);
+    setClassrooms(Array.isArray(reportsResult.classrooms) ? reportsResult.classrooms : []);
+    setHbTests(Array.isArray(hbResult.hb_tests) ? hbResult.hb_tests : []);
+    setError('');
+  }, []);
+
+  const handleProtectedError = useCallback(async (requestError) => {
+    if (requestError.code === 'SESSION_EXPIRED') {
+      await clearSchoolSession();
+      router.replace('/school/login?reason=session_expired');
+      return true;
+    }
+    return false;
+  }, []);
+
+  const load = useCallback(async (value) => {
+    setLoading(true);
+    try {
+      await refresh(value);
+    } catch (requestError) {
+      if (!(await handleProtectedError(requestError))) setError(requestError.message || 'Unable to load the dashboard.');
+    } finally {
+      setLoading(false);
+    }
+  }, [handleProtectedError, refresh]);
+
+  useEffect(() => {
+    AsyncStorage.getItem('token').then((value) => {
+      if (!value) {
+        router.replace('/school/login');
+        return;
+      }
+      setToken(value);
+      load(value);
+    });
+  }, [load]);
+
+  useFocusEffect(useCallback(() => {
+    if (!token) return undefined;
+    load(token);
+    return undefined;
+  }, [load, token]));
+
+  if (loading && counts.students === null) {
+    return <View style={styles.center}><ActivityIndicator color={COLORS.primary} /><Text style={styles.muted}>Loading dashboard…</Text></View>;
+  }
+
   return (
-    <SafeAreaView style={styles.page}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.title}>School dashboard</Text>
-            <Text style={styles.muted}>{profile?.school_name || 'School profile unavailable'}</Text>
-          </View>
-          <View style={styles.actions}>
-            <Pressable onPress={() => router.push('/school/tablets')}><Text style={styles.link}>Tablets</Text></Pressable>
-            <Pressable onPress={() => router.push('/school/reports')}><Text style={styles.link}>Reports</Text></Pressable>
-            <Pressable onPress={() => router.push('/school/parents')}><Text style={styles.link}>Parents</Text></Pressable>
-            <Pressable onPress={async () => { await clearSchoolSession(); router.replace('/school/login'); }}><Text style={styles.logout}>Logout</Text></Pressable>
-          </View>
-        </View>
-        {message ? <Text style={styles.message}>{message}</Text> : null}
-
-        <View style={styles.healthCard}>
-          <View style={styles.healthCardHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.healthTitle}>Health & Supplementation Program</Text>
-              <Text style={styles.muted}>Monitor tablet supplementation, dose adherence, Hb records, and student follow-ups.</Text>
-            </View>
-            <View style={styles.healthActions}>
-              <Pressable style={styles.healthBtn} onPress={() => router.push('/school/tablets')}>
-                <Text style={styles.healthBtnText}>Supplementation</Text>
-              </Pressable>
-              <Pressable style={[styles.healthBtn, styles.healthBtnAlt]} onPress={() => router.push('/school/reports')}>
-                <Text style={[styles.healthBtnText, styles.healthBtnTextAlt]}>Reports & Follow-ups</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-
-        <Section title="Teachers" add={() => setActive(active === 'teacher' ? '' : 'teacher')}>
-          {teachers.length
-            ? teachers.map((t) => (
-                <Pressable key={t.teacher_id} onPress={() => router.push(`/school/teachers/${t.teacher_id}`)}>
-                  <Text style={styles.row}>{t.first_name} {t.last_name} • {t.email} • {t.is_active ? 'Active' : 'Inactive'}</Text>
-                </Pressable>
-              ))
-            : <Text style={styles.muted}>No teachers yet.</Text>}
-          {active === 'teacher' ? <>
-            <Input placeholder="First name" value={teacher.first_name} onChangeText={(v) => setTeacher({ ...teacher, first_name: v })} />
-            <Input placeholder="Last name" value={teacher.last_name} onChangeText={(v) => setTeacher({ ...teacher, last_name: v })} />
-            <Input placeholder="Email" value={teacher.email} onChangeText={(v) => setTeacher({ ...teacher, email: v })} />
-            <Input placeholder="Temporary password" secureTextEntry value={teacher.password} onChangeText={(v) => setTeacher({ ...teacher, password: v })} />
-            <Save onPress={() => save('teacher')} />
-          </> : null}
-        </Section>
-
-        <Section title="Classrooms" add={() => setActive(active === 'classroom' ? '' : 'classroom')}>
-          <Text style={styles.helper}>Class-section records with legacy classrooms preserved.</Text>
-          {classrooms.length
-            ? classrooms.map((item) => {
-                const assignedT = teachers.find((t) => t.teacher_id === item.teacher_id);
-                return (
-                  <View key={item.classroom_id} style={styles.classroom}>
-                    <Pressable onPress={() => router.push(`/school/classrooms/${item.classroom_id}`)}>
-                      <Text style={styles.row}>{classroomLabel(item)}</Text>
-                    </Pressable>
-                    <Text style={styles.muted}>Primary teacher: {assignedT ? `${assignedT.first_name} ${assignedT.last_name}` : 'Not assigned'}</Text>
-                    <View style={styles.choices}>
-                      <Pressable style={[styles.choice, !item.teacher_id && styles.selected]} onPress={() => assign(item.classroom_id, null)}><Text>Not assigned</Text></Pressable>
-                      {teachers.filter((t) => t.is_active).map((t) => (
-                        <Pressable key={t.teacher_id} style={[styles.choice, item.teacher_id === t.teacher_id && styles.selected]} onPress={() => assign(item.classroom_id, t.teacher_id)}>
-                          <Text>{t.first_name} {t.last_name}</Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                  </View>
-                );
-              })
-            : <Text style={styles.muted}>No classrooms yet.</Text>}
-          {active === 'classroom' ? <>
-            <Text style={styles.label}>Class / grade</Text>
-            <View style={styles.choices}>
-              {SUPPORTED_GRADES.map((value) => (
-                <Pressable
-                  key={value}
-                  style={[styles.choice, grade === value && styles.selected]}
-                  onPress={() => {
-                    setGrade(value);
-                    setSection('');
-                    setMessage('');
-                  }}
-                >
-                  <Text>{value}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <SectionPicker
-              grade={grade}
-              existingSections={classrooms.filter((c) => c.grade_name === grade).map((c) => c.section_name)}
-              value={section}
-              onChange={setSection}
-            />
-            <Text style={styles.label}>Primary teacher (optional)</Text>
-            <View style={styles.choices}>
-              <Pressable style={[styles.choice, !assignedTeacher && styles.selected]} onPress={() => setAssignedTeacher('')}><Text>Not assigned</Text></Pressable>
-              {teachers.filter((t) => t.is_active).map((t) => (
-                <Pressable key={t.teacher_id} style={[styles.choice, assignedTeacher === String(t.teacher_id) && styles.selected]} onPress={() => setAssignedTeacher(String(t.teacher_id))}>
-                  <Text>{t.first_name} {t.last_name}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <Save onPress={() => save('classroom')} />
-          </> : null}
-        </Section>
-
-        <Section title="Students" add={() => setActive(active === 'student' ? '' : 'student')}>
-          <Input placeholder="Search students" value={studentSearch} onChangeText={setStudentSearch} />
-          <View style={styles.choices}>
-            <Pressable style={styles.choice} onPress={() => setStudentClassroom('')}><Text>All class-sections</Text></Pressable>
-            {classrooms.map((c) => (
-              <Pressable key={c.classroom_id} style={[styles.choice, studentClassroom === String(c.classroom_id) && styles.selected]} onPress={() => setStudentClassroom(String(c.classroom_id))}>
-                <Text>{classroomLabel(c)}</Text>
-              </Pressable>
-            ))}
-          </View>
-          {visible.length
-            ? visible.map((item) => (
-                <Pressable key={item.student_id} onPress={() => router.push(`/school/students/${item.student_id}`)}>
-                  <Text style={styles.row}>{item.first_name} {item.last_name} • Roll {item.roll_number} • {classroomLabel(classrooms.find((c) => c.classroom_id === item.classroom_id))}{item.is_flagged ? ' • ⚑ Flagged' : ''}</Text>
-                </Pressable>
-              ))
-            : <Text style={styles.muted}>{students.length ? 'No students match your search.' : 'No students yet.'}</Text>}
-          {active === 'student' ? <>
-            <Text style={styles.label}>Class-section</Text>
-            <View style={styles.choices}>
-              {classrooms.map((c) => (
-                <Pressable key={c.classroom_id} style={[styles.choice, student.classroom_id === String(c.classroom_id) && styles.selected]} onPress={() => setStudent({ ...student, classroom_id: String(c.classroom_id) })}>
-                  <Text>{classroomLabel(c)}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <Input placeholder="Roll number" keyboardType="numeric" value={student.roll_number} onChangeText={(v) => setStudent({ ...student, roll_number: v })} />
-            <Input placeholder="First name" value={student.first_name} onChangeText={(v) => setStudent({ ...student, first_name: v })} />
-            <Input placeholder="Last name" value={student.last_name} onChangeText={(v) => setStudent({ ...student, last_name: v })} />
-            <Text style={styles.label}>Parent/guardian contact</Text>
-            <Pressable style={[styles.choice, student.parent_contact_unavailable && styles.selected]} onPress={() => setStudent({ ...student, parent_contact_unavailable: !student.parent_contact_unavailable, ...(student.parent_contact_unavailable ? {} : { parent_phone: '', relationship: '', relationship_description: '' }) })}>
-              <Text>{student.parent_contact_unavailable ? 'Contact unavailable (selected)' : 'Parent/guardian contact unavailable'}</Text>
-            </Pressable>
-            {!student.parent_contact_unavailable ? <>
-              <Input placeholder="Parent phone number" value={student.parent_phone} onChangeText={(v) => setStudent({ ...student, parent_phone: v })} />
-              <View style={styles.choices}>
-                {['Mother', 'Father', 'Guardian', 'Other'].map((v) => (
-                  <Pressable key={v} style={[styles.choice, student.relationship === v && styles.selected]} onPress={() => setStudent({ ...student, relationship: v })}>
-                    <Text>{v}</Text>
-                  </Pressable>
-                ))}
+    <SafeAreaView style={styles.page} edges={['top', 'bottom']}>
+      <View style={styles.flex}>
+        <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, compact && styles.contentCompact]} showsVerticalScrollIndicator={false}>
+          <View style={styles.topHeader}>
+            <View style={styles.brandRow}>
+              <View style={styles.brandMark}><Text style={styles.brandDrop}>＋</Text></View>
+              <View>
+                <View style={styles.brandLabelRow}><Text style={styles.brandLabel}>ANEMIA TRACKER</Text></View>
+                <Text style={styles.headerContext}>School Dashboard</Text>
               </View>
-              {student.relationship === 'Other' ? <Input placeholder="Relationship description" value={student.relationship_description} onChangeText={(v) => setStudent({ ...student, relationship_description: v })} /> : null}
-            </> : null}
-            <Save onPress={() => save('student')} />
-          </> : null}
-        </Section>
-      </ScrollView>
+            </View>
+            <Pressable onPress={() => router.push('/school/profile')} style={styles.profileBlock} accessibilityRole="button" accessibilityLabel="Open school profile">
+              <View style={styles.profileAvatar}><Text style={styles.profileAvatarText}>●</Text></View>
+            </Pressable>
+          </View>
+
+          <View style={styles.campusHeader}>
+            <View style={styles.campusTitleRow}>
+              <View style={styles.campusTitleCopy}><Text style={styles.campusTitle}>{profile?.school_name || 'School overview'}</Text></View>
+              <Pressable style={styles.settingsButton} onPress={() => router.push('/school/reports')}><Text style={styles.settingsIcon}>⚙</Text></Pressable>
+            </View>
+          </View>
+
+          {error ? <View style={styles.errorCard}><Text style={styles.error}>{error}</Text><Pressable onPress={() => load(token)}><Text style={styles.retry}>Retry</Text></Pressable></View> : null}
+
+          <View style={styles.metricGrid}>
+            <Metric label="Students" value={counts.students} note="Total enrolled" icon="♧" />
+            <Metric label="Teachers" value={counts.teachers} note="Active faculty" icon="▣" />
+            <Metric label="Classrooms" value={counts.classrooms} note="All sections" icon="▦" />
+          </View>
+
+          <SectionHeading title="Administrative Tools" detail="Quick Access" />
+          <View style={styles.shortcutGrid}>
+            <Shortcut title="Student Directory" note="Search & grade filters" icon="⌕" onPress={() => router.push('/school/students')} />
+            <Shortcut title="Teacher Roster" note="Screening duty roles" icon="▣" onPress={() => router.push('/school/teachers')} />
+            <Shortcut title="Classroom Directory" note={`${counts.classrooms || 0} sections configured`} icon="▦" onPress={() => router.push('/school/classrooms')} />
+            <Shortcut title="School Health Reports" note="District sync stats" icon="▥" onPress={() => router.push('/school/reports')} />
+          </View>
+
+          <View style={styles.actionDeck}>
+            <Pressable style={styles.primaryAction} onPress={() => router.push('/school/students')}><Text style={styles.actionIcon}>＋</Text><Text style={styles.primaryActionText}>Enroll New Student</Text></Pressable>
+            <Pressable style={styles.secondaryAction} onPress={() => router.push('/school/reports')}><Text style={styles.actionIconSecondary}>↓</Text><Text style={styles.secondaryActionText}>Download Compliance Report (CSV/PDF)</Text></Pressable>
+          </View>
+
+          <SectionHeading title="Screening Progress" detail={`${classrooms.length} monitored`} action="View All" onAction={() => router.push('/school/reports')} />
+          <View style={styles.progressList}>
+            {classrooms.length ? classrooms.slice(0, 6).map((classroom) => <ProgressCard key={classroom.classroom_id} classroom={classroom} hbTests={hbTests} teachers={teachers} />) : <View style={styles.emptyCard}><Text style={styles.muted}>No classroom screening data yet.</Text></View>}
+          </View>
+
+        </ScrollView>
+
+        <View style={styles.bottomNav}>
+          <NavItem icon="⌂" label="Dashboard" active onPress={() => {}} />
+          <NavItem icon="♧" label="Students" onPress={() => router.push('/school/students')} />
+          <NavItem icon="✚" label="Records" onPress={() => router.push('/school/reports')} />
+          <NavItem icon="⚙" label="Role" onPress={() => router.push('/school/teachers')} />
+        </View>
+      </View>
     </SafeAreaView>
   );
 }
-function Section({ title, add, children }) { return <View style={styles.section}><View style={styles.sectionHeader}><Text style={styles.sectionTitle}>{title}</Text><Pressable onPress={add}><Text style={styles.link}>Add</Text></Pressable></View>{children}</View>; }
-function Input(props) { return <TextInput {...props} style={styles.input} />; }
-function SectionPicker({ grade, existingSections = [], value, onChange }) {
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [error, setError] = useState('');
-  const defaults = ['A', 'B', 'C', 'D'];
-  const suggestedLetter = suggestNextSectionLetter(existingSections);
 
-  function startAdding() {
-    setError('');
-    setDraft(suggestedLetter || '');
-    setAdding(true);
-  }
-
-  function add() {
-    const normalized = draft.trim().toUpperCase();
-    if (!normalized) return setError('Section name is required.');
-    if (!/^[A-Z0-9][A-Z0-9 ._-]*$/.test(normalized) || normalized.length > 20) {
-      return setError('Use up to 20 letters, numbers, spaces, dots, hyphens, or underscores.');
-    }
-    if (existingSections.includes(normalized)) {
-      return setError(`Section ${normalized} already exists in ${grade || 'this class'}.`);
-    }
-    setError('');
-    onChange(normalized);
-    setDraft('');
-    setAdding(false);
-  }
-
-  return (
-    <View>
-      <Text style={styles.label}>Section</Text>
-      <View style={styles.choices}>
-        {defaults.map((item) => (
-          <Pressable
-            key={item}
-            style={[styles.choice, value === item && !adding && styles.selected]}
-            onPress={() => {
-              setAdding(false);
-              setError('');
-              onChange(item);
-            }}
-          >
-            <Text>{item}</Text>
-          </Pressable>
-        ))}
-        {Boolean(value) && !defaults.includes(value) ? (
-          <Pressable
-            style={[styles.choice, !adding && styles.selected]}
-            onPress={() => {
-              setAdding(false);
-              setError('');
-            }}
-          >
-            <Text>{value}</Text>
-          </Pressable>
-        ) : null}
-        <Pressable
-          style={[styles.choice, adding && styles.selected]}
-          onPress={startAdding}
-        >
-          <Text>Add new section</Text>
-        </Pressable>
-      </View>
-      {adding ? (
-        <View style={styles.addSection}>
-          <TextInput
-            style={styles.input}
-            autoFocus
-            placeholder={suggestedLetter ? `e.g. ${suggestedLetter}` : 'New section'}
-            value={draft}
-            onChangeText={(v) => {
-              setError('');
-              setDraft(v);
-            }}
-          />
-          <Pressable style={styles.smallButton} onPress={add}>
-            <Text style={styles.smallButtonText}>Add</Text>
-          </Pressable>
-        </View>
-      ) : null}
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-    </View>
-  );
+function Metric({ label, value, note, icon, featured = false }) {
+  return <View style={[styles.metric, featured && styles.metricFeatured]}><Text style={[styles.metricLabel, featured && styles.metricLabelFeatured]}>{label.toUpperCase()}</Text><Text style={[styles.metricValue, featured && styles.metricValueFeatured]}>{value == null ? '—' : value}</Text><Text style={[styles.metricNote, featured && styles.metricNoteFeatured]}>{note}</Text></View>;
 }
-function Save({ onPress }) { const [busy, setBusy] = useState(false); return <Pressable disabled={busy} style={styles.save} onPress={async () => { if (busy) return; setBusy(true); try { await onPress(); } finally { setBusy(false); } }}>{busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveText}>Save</Text>}</Pressable>; }
-const styles = StyleSheet.create({ page: { flex: 1, backgroundColor: '#f5f7fa' }, content: { width: '100%', maxWidth: 900, alignSelf: 'center', padding: 24, gap: 16 }, center: { flex: 1, alignItems: 'center', justifyContent: 'center' }, header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, actions: { flexDirection: 'row', gap: 16 }, title: { fontSize: 28, fontWeight: '700' }, section: { backgroundColor: '#fff', borderRadius: 12, padding: 18, gap: 8 }, sectionHeader: { flexDirection: 'row', justifyContent: 'space-between' }, sectionTitle: { fontSize: 20, fontWeight: '700' }, label: { fontWeight: '700', marginTop: 8 }, helper: { color: '#667085' }, muted: { color: '#667085' }, link: { color: '#1769aa', fontWeight: '700' }, logout: { color: '#b42318', fontWeight: '700' }, row: { paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#eaecf0' }, classroom: { paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#eaecf0' }, choices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }, choice: { borderWidth: 1, borderColor: '#d0d5dd', borderRadius: 8, padding: 9 }, selected: { backgroundColor: '#dbeafe', borderColor: '#1769aa' }, input: { borderWidth: 1, borderColor: '#d0d5dd', borderRadius: 8, padding: 12, marginTop: 4, flex: 1 }, addSection: { flexDirection: 'row', alignItems: 'center', gap: 8 }, smallButton: { backgroundColor: '#1769aa', borderRadius: 8, padding: 12, marginTop: 4 }, smallButtonText: { color: '#fff', fontWeight: '700' }, error: { color: '#b42318' }, save: { backgroundColor: '#1769aa', borderRadius: 8, padding: 12, alignItems: 'center', marginTop: 8 }, saveText: { color: '#fff', fontWeight: '700' }, message: { color: '#1769aa' }, healthCard: { backgroundColor: '#fff', borderRadius: 12, padding: 18, borderWidth: 1, borderColor: '#eaecf0' }, healthCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }, healthTitle: { fontSize: 18, fontWeight: '700', color: '#101828' }, healthActions: { flexDirection: 'row', gap: 8 }, healthBtn: { backgroundColor: '#1769aa', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 }, healthBtnAlt: { backgroundColor: '#f2f4f7' }, healthBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 }, healthBtnTextAlt: { color: '#344054', fontWeight: '700', fontSize: 13 } });
+
+function SectionHeading({ title, detail, action, onAction }) {
+  return <View style={styles.sectionHeading}><View style={styles.sectionHeadingTitle}><Text style={styles.sectionTitle}>{title}</Text>{detail ? <Text style={styles.sectionDetail}>{detail}</Text> : null}</View>{action ? <Pressable onPress={onAction}><Text style={styles.sectionAction}>{action}</Text></Pressable> : null}</View>;
+}
+
+function Shortcut({ title, note, icon, onPress }) {
+  return <Pressable style={({ pressed }) => [styles.shortcut, pressed && styles.pressed]} onPress={onPress}><View style={styles.shortcutIcon}><Text style={styles.shortcutIconText}>{icon}</Text></View><View><Text style={styles.shortcutTitle} numberOfLines={2}>{title}</Text><Text style={styles.shortcutNote} numberOfLines={2}>{note}</Text></View></Pressable>;
+}
+
+function ProgressCard({ classroom, hbTests, teachers }) {
+  const measured = hbTests.filter((test) => String(test.classroom_id) === String(classroom.classroom_id)).length;
+  const total = Number(classroom.student_count) || 0;
+  const progress = total ? Math.min(100, Math.round((measured / total) * 100)) : 0;
+  const label = classroom.grade_name && classroom.section_name ? `${classroom.grade_name} – ${classroom.section_name}` : classroom.class_name || 'Classroom';
+  const teacher = teachers.find((item) => String(item.teacher_id) === String(classroom.teacher_id));
+  const teacherName = teacher ? `${teacher.first_name || ''} ${teacher.last_name || ''}`.trim() : 'Teacher unassigned';
+  return <View style={styles.progressCard}><View style={styles.progressTop}><View style={styles.classroomIdentity}><View style={styles.classroomMark}><Text style={styles.classroomMarkText}>{(classroom.section_name || classroom.class_name || 'CL').slice(0, 2).toUpperCase()}</Text></View><View><Text style={styles.progressTitle}>{label}</Text><Text style={styles.progressNote}>Lead: {teacherName}</Text></View></View><Text style={styles.progressBadge}>{progress}% {progress === 100 ? 'Completed' : 'Screened'}</Text></View><View style={styles.progressMeta}><Text style={styles.muted}>Measured {measured} of {total}</Text><Text style={styles.progressStatus}>{progress === 100 ? 'Complete' : progress ? `${Math.max(total - measured, 0)} Remaining` : 'Pending'}</Text></View><View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${progress}%` }]} /></View></View>;
+}
+
+function NavItem({ icon, label, active, onPress }) {
+  return <Pressable style={styles.navItem} onPress={onPress}><Text style={[styles.navIcon, active && styles.navActive]}>{icon}</Text><Text style={[styles.navLabel, active && styles.navActive]}>{label}</Text></Pressable>;
+}
+
+const styles = StyleSheet.create({
+  page: { flex: 1, backgroundColor: COLORS.background },
+  flex: { flex: 1 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: COLORS.background },
+  scroll: { flex: 1 },
+  content: { width: '100%', maxWidth: 720, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 24, gap: 16 },
+  contentCompact: { paddingHorizontal: 12, gap: 13 },
+  topHeader: { minHeight: 72, marginHorizontal: -20, paddingHorizontal: 20, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: '#ead8df', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  brandMark: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#234ca2', alignItems: 'center', justifyContent: 'center' },
+  brandDrop: { color: '#fff', fontSize: 18 },
+  brandLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  brandLabel: { color: COLORS.primary, fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
+  brandPill: { color: COLORS.muted, backgroundColor: COLORS.high, borderRadius: 8, paddingHorizontal: 5, paddingVertical: 2, fontSize: 9 },
+  headerContext: { color: COLORS.text, fontSize: 16, fontWeight: '700', marginTop: 2 },
+  profileBlock: { flexDirection: 'row', alignItems: 'center', gap: 7, maxWidth: 160 },
+  profileText: { alignItems: 'flex-end', flexShrink: 1 },
+  profileName: { color: COLORS.text, fontSize: 10, fontWeight: '600' },
+  profileRole: { color: COLORS.secondary, fontSize: 10, marginTop: 2 },
+  profileAvatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
+  profileAvatarText: { color: '#fff', fontSize: 13 },
+  campusHeader: { gap: 8, paddingTop: 4 },
+  campusMeta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  metaBadge: { color: '#782944', backgroundColor: COLORS.secondaryFixed, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 3, fontSize: 9, fontWeight: '700', textTransform: 'uppercase' },
+  liveBadge: { color: COLORS.primary, backgroundColor: COLORS.high, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 3, fontSize: 9, fontWeight: '600' },
+  term: { flex: 1, color: COLORS.muted, fontSize: 10, textAlign: 'right' },
+  campusTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  campusTitleCopy: { flex: 1 },
+  campusTitle: { color: COLORS.text, fontFamily: 'Georgia', fontSize: 25, lineHeight: 32 },
+  campusSubtitle: { color: COLORS.muted, fontSize: 12, lineHeight: 18, marginTop: 2 },
+  settingsButton: { width: 40, height: 40, borderRadius: 12, backgroundColor: COLORS.high, alignItems: 'center', justifyContent: 'center' },
+  settingsIcon: { color: COLORS.primary, fontSize: 19 },
+  errorCard: { backgroundColor: '#ffdad6', borderRadius: 12, padding: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  error: { color: '#93000a', flex: 1, fontSize: 13 },
+  retry: { color: COLORS.primary, fontWeight: '700', paddingLeft: 12 },
+  metricGrid: { flexDirection: 'row', gap: 8 },
+  metric: { flex: 1, minHeight: 138, backgroundColor: COLORS.surface, borderRadius: 10, padding: 14, justifyContent: 'space-between', borderWidth: 1, borderColor: '#ead8df', shadowColor: COLORS.primary, shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 },
+  metricFeatured: { backgroundColor: COLORS.primaryContainer },
+  metricTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  metricLabel: { color: COLORS.muted, fontSize: 10, fontWeight: '700', letterSpacing: 0.4 },
+  metricLabelFeatured: { color: '#f4a9c8' },
+  metricIcon: { width: 28, height: 28, borderRadius: 8, backgroundColor: COLORS.low, alignItems: 'center', justifyContent: 'center' },
+  metricIconFeatured: { backgroundColor: COLORS.primary },
+  metricIconText: { color: COLORS.primary, fontSize: 15, fontWeight: '700' },
+  metricIconTextFeatured: { color: '#fff' },
+  metricValue: { color: COLORS.text, fontSize: 30, fontWeight: '700', marginTop: 7 },
+  metricValueFeatured: { color: '#fff' },
+  metricNote: { color: COLORS.muted, fontSize: 10 },
+  metricNoteFeatured: { color: '#f4a9c8' },
+  sectionHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 3 },
+  sectionHeadingTitle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sectionTitle: { color: COLORS.text, fontSize: 16, fontWeight: '700' },
+  sectionDetail: { color: COLORS.muted, fontSize: 10 },
+  sectionAction: { color: COLORS.secondary, fontSize: 11, fontWeight: '700' },
+  shortcutGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  shortcut: { width: '48.5%', minHeight: 140, backgroundColor: COLORS.surface, borderRadius: 10, padding: 16, justifyContent: 'space-between', borderWidth: 1, borderColor: '#ead8df', shadowColor: COLORS.primary, shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 },
+  shortcutIcon: { width: 40, height: 40, borderRadius: 6, backgroundColor: COLORS.secondaryFixed, alignItems: 'center', justifyContent: 'center' },
+  shortcutIconText: { color: COLORS.primary, fontSize: 19, fontWeight: '700' },
+  shortcutTitle: { color: COLORS.text, fontSize: 16, lineHeight: 21, fontWeight: '700' },
+  shortcutNote: { color: COLORS.muted, fontSize: 12, lineHeight: 17, marginTop: 3 },
+  actionDeck: { gap: 8 },
+  primaryAction: { minHeight: 48, borderRadius: 12, backgroundColor: COLORS.primaryContainer, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  primaryActionText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  actionIcon: { color: '#fff', fontSize: 20 },
+  secondaryAction: { minHeight: 48, borderRadius: 12, backgroundColor: COLORS.surface, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  secondaryActionText: { flex: 1, color: COLORS.primary, fontSize: 14, lineHeight: 19, fontWeight: '700', textAlign: 'center' },
+  actionIconSecondary: { color: COLORS.primary, fontSize: 20 },
+  progressList: { gap: 8 },
+  progressCard: { backgroundColor: COLORS.surface, borderRadius: 10, padding: 20, borderWidth: 1, borderColor: '#ead8df', shadowColor: COLORS.primary, shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 },
+  progressTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  classroomIdentity: { flexDirection: 'row', alignItems: 'center', gap: 9, flex: 1 },
+  classroomMark: { width: 36, height: 36, borderRadius: 9, backgroundColor: COLORS.low, alignItems: 'center', justifyContent: 'center' },
+  classroomMarkText: { color: COLORS.primary, fontSize: 12, fontWeight: '700' },
+  progressTitle: { color: COLORS.text, fontSize: 17, fontWeight: '700' },
+  progressNote: { color: COLORS.muted, fontSize: 13, marginTop: 2 },
+  progressBadge: { color: COLORS.primary, backgroundColor: COLORS.secondaryFixed, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 5, fontSize: 10, fontWeight: '700' },
+  progressMeta: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10, marginBottom: 5 },
+  progressStatus: { color: COLORS.secondary, fontSize: 10, fontWeight: '700' },
+  progressTrack: { height: 9, borderRadius: 5, overflow: 'hidden', backgroundColor: '#f2e4e9' },
+  progressFill: { height: '100%', borderRadius: 5, backgroundColor: COLORS.primary },
+  emptyCard: { backgroundColor: COLORS.surface, borderRadius: 12, padding: 18 },
+  bottomNav: { flexShrink: 0, height: 68, backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.high, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingHorizontal: 6 },
+  navItem: { minWidth: 64, alignItems: 'center', justifyContent: 'center', gap: 2 },
+  navIcon: { color: COLORS.muted, fontSize: 22 },
+  navLabel: { color: COLORS.muted, fontSize: 10 },
+  navActive: { color: COLORS.primary, fontWeight: '700' },
+  pressed: { opacity: 0.8, transform: [{ scale: 0.99 }] },
+  muted: { color: COLORS.muted, fontSize: 12 },
+});
