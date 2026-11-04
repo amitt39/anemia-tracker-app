@@ -284,7 +284,7 @@ const styles = StyleSheet.create({
   primaryText: { color: '#fff', fontWeight: '700' },
   inviteCard: { backgroundColor: COLORS.surface, borderRadius: 14, padding: 16, gap: 10, borderWidth: 1, borderColor: '#ead8df' },
   card: { backgroundColor: COLORS.surface, borderRadius: 14, padding: 16, gap: 8, borderWidth: 1, borderColor: '#ead8df' },
-  cardHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  cardHeader: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 10 },
   cardCopy: { flex: 1, gap: 3 },
   cardTitle: { color: COLORS.text, fontSize: 16, fontWeight: '700' },
   name: { color: COLORS.text, fontSize: 18, fontWeight: '700' },

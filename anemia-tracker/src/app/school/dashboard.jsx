@@ -99,7 +99,7 @@ export default function Dashboard() {
     <SafeAreaView style={styles.page} edges={['top', 'bottom']}>
       <View style={styles.flex}>
         <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, compact && styles.contentCompact]} showsVerticalScrollIndicator={false}>
-          <View style={styles.topHeader}>
+          <View style={[styles.topHeader, compact && styles.topHeaderCompact]}>
             <View style={styles.brandRow}>
               <View style={styles.brandMark}><Text style={styles.brandDrop}>＋</Text></View>
               <View>
@@ -192,6 +192,7 @@ const styles = StyleSheet.create({
   content: { width: '100%', maxWidth: 720, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 24, gap: 16 },
   contentCompact: { paddingHorizontal: 12, gap: 13 },
   topHeader: { minHeight: 72, marginHorizontal: -20, paddingHorizontal: 20, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: '#ead8df', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  topHeaderCompact: { marginHorizontal: -12, paddingHorizontal: 12 },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
   brandMark: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#234ca2', alignItems: 'center', justifyContent: 'center' },
   brandDrop: { color: '#fff', fontSize: 18 },
@@ -239,7 +240,7 @@ const styles = StyleSheet.create({
   sectionDetail: { color: COLORS.muted, fontSize: 10 },
   sectionAction: { color: COLORS.secondary, fontSize: 11, fontWeight: '700' },
   shortcutGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  shortcut: { width: '48.5%', minHeight: 140, backgroundColor: COLORS.surface, borderRadius: 10, padding: 16, justifyContent: 'space-between', borderWidth: 1, borderColor: '#ead8df', shadowColor: COLORS.primary, shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 },
+  shortcut: { flex: 1, minWidth: 140, minHeight: 140, backgroundColor: COLORS.surface, borderRadius: 10, padding: 16, justifyContent: 'space-between', borderWidth: 1, borderColor: '#ead8df', shadowColor: COLORS.primary, shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 },
   shortcutIcon: { width: 40, height: 40, borderRadius: 6, backgroundColor: COLORS.secondaryFixed, alignItems: 'center', justifyContent: 'center' },
   shortcutIconText: { color: COLORS.primary, fontSize: 19, fontWeight: '700' },
   shortcutTitle: { color: COLORS.text, fontSize: 16, lineHeight: 21, fontWeight: '700' },

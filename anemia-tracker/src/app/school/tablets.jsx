@@ -328,7 +328,7 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: COLORS.background },
   content: { width: '100%', maxWidth: 900, alignSelf: 'center', paddingHorizontal: 20, paddingBottom: 32, paddingTop: 8, gap: 14 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10, backgroundColor: COLORS.background, padding: 20 },
-  topBar: { minHeight: 52, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  topBar: { minHeight: 52, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   back: { color: COLORS.primaryContainer, fontSize: 14, fontWeight: '700' },
   topLabel: { color: COLORS.secondary, fontSize: 10, fontWeight: '700', letterSpacing: 1 },
   hero: { backgroundColor: COLORS.low, borderRadius: 16, padding: 20 },
@@ -364,7 +364,7 @@ const styles = StyleSheet.create({
 
   coursesList: { gap: 12 },
   courseCard: { backgroundColor: COLORS.surface, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: '#ead8df', gap: 10 },
-  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  cardTop: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 },
   studentInfo: { gap: 2 },
   studentName: { fontSize: 17, fontWeight: '700', color: COLORS.text },
   meta: { fontSize: 13, color: COLORS.muted },
@@ -384,7 +384,7 @@ const styles = StyleSheet.create({
   dosePillRed: { backgroundColor: '#fef3f2', color: '#b42318' },
   dosePillBlue: { backgroundColor: COLORS.secondaryFixed, color: COLORS.primary },
 
-  cardActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f2f4f7' },
+  cardActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f2f4f7' },
   toggleButton: { paddingVertical: 4 },
   toggleButtonText: { color: COLORS.secondary, fontWeight: '600', fontSize: 13 },
   studentLink: { paddingVertical: 4 },
@@ -392,7 +392,7 @@ const styles = StyleSheet.create({
 
   dosesContainer: { backgroundColor: COLORS.low, borderRadius: 10, padding: 12, marginTop: 8, gap: 6 },
   dosesHeader: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 4 },
-  doseItem: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5, borderTopWidth: 1, borderTopColor: '#eaecf0' },
+  doseItem: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8, paddingVertical: 5, borderTopWidth: 1, borderTopColor: '#eaecf0' },
   doseItemDate: { fontSize: 13, color: '#344054' },
   doseItemStatus: { fontSize: 13, fontWeight: '700' },
 

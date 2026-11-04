@@ -75,4 +75,3 @@ export function createTeacherTabletCourse(token, studentId, data) { return reque
 export function getTeacherStudentTabletDoses(token, studentId) { return request(`/teacher/students/${studentId}/tablet-doses`, { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function getTeacherTabletDoses(token) { return request('/teacher/tablet-doses', { headers: { Authorization: `Bearer ${token}` } }, true); }
 export function createTeacherTabletDoses(token, courseId, data) { return request(`/tablet-courses/${courseId}/tablet-doses`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) }, true); }
-export function markTeacherTabletDoseTaken(token, doseId) { return request(`/teacher/tablet-doses/${doseId}/take`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }, true); }

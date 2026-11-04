@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: AUTH.background },
   content: { width: '100%', maxWidth: 900, alignSelf: 'center', padding: 16, paddingBottom: 44 },
   center: { flex: 1, backgroundColor: AUTH.background, justifyContent: 'center', alignItems: 'center', gap: 10 },
-  topBar: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 12 },
+  topBar: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 14, marginBottom: 12 },
   topCopy: { flex: 1 },
   eyebrow: { color: AUTH.secondary, fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
   title: { color: AUTH.primary, fontFamily: 'Georgia', fontSize: 28, fontWeight: '500', marginTop: 3 },

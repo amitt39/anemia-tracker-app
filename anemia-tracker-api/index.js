@@ -296,14 +296,6 @@ async function requireActiveSchoolParent(parentId, schoolId) {
   return result.rows.length > 0;
 }
 
-// Example protected route
-app.get("/api/protected", requireSchoolAuth, (req, res) => {
-  res.status(200).json({
-    message: "Authentication successful",
-    school_id: req.school_id,
-  });
-});
-
 app.get("/schools/me", requireSchoolAuth, async (req, res, next) => {
   try {
     const result = await pool.query(

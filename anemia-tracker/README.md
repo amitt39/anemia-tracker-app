@@ -1,60 +1,66 @@
-# Welcome to your Expo app 👋
+# Anemia Tracker frontend
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Expo Router frontend for the Anemia Tracker school-health workspace. The app supports web, Android, and iOS from the same `src/app` route tree.
 
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Configure the API endpoint
-
-   Copy `.env.example` to `.env` and set `EXPO_PUBLIC_API_URL` to the reachable address of the Anemia Tracker API for your device or emulator.
-
-3. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Run locally
 
 ```bash
-npm run reset-project
+npm install
+cp .env.example .env
+npm run web
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+For a native device or emulator, set `EXPO_PUBLIC_API_URL` in `.env` to an API address reachable from that device. `localhost` usually refers to the device itself, not the computer running the API.
 
-### Other setup steps
+```bash
+npx expo start
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+## Checks
 
-## Learn more
+```bash
+npm run lint
+npx tsc --noEmit
+npx expo export --platform web
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+## Workspaces
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+### Public and authentication
 
-## Join the community
+- `/` — session-aware welcome screen
+- `/role-selection` — choose School Admin, Teacher, or Parent
+- `/school/login`, `/school/register`, `/school/forgot-password`, `/school/reset-password`
+- `/teacher/login`
+- `/parent/login`
 
-Join our community of developers creating universal apps.
+### School Admin
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- `/school/dashboard`
+- `/school/students` and `/school/students/:student_id`
+- `/school/teachers` and `/school/teachers/:teacher_id`
+- `/school/classrooms` and `/school/classrooms/:classroom_id`
+- `/school/parents`
+- `/school/tablets`
+- `/school/reports`
+- `/school/profile`
+
+School Admins manage people, classrooms, parent links, tablet follow-up, and reports. Hb history is read-only for them; Hb results are recorded by the teacher assigned to the student’s classroom.
+
+### Teacher
+
+- `/teacher/dashboard`
+- `/teacher/classrooms` and `/teacher/classrooms/:classroom_id`
+- `/teacher/students` and `/teacher/students/:student_id`
+- `/teacher/hb-tests`
+- `/teacher/tablet-doses`
+
+Teachers can only access assigned classrooms and students. Hb results and tablet actions are recorded from the teacher workspace.
+
+### Parent
+
+- `/parent/dashboard`
+
+Parents can accept school invitations, confirm child links, view verified Hb and tablet records, and mark an authorized scheduled dose as taken.
+
+The legacy `/login`, `/dashboard`, `/register`, and `/explore` paths remain safe redirects for older bookmarks.

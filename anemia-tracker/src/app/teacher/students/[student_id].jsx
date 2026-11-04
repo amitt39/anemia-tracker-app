@@ -22,7 +22,6 @@ import {
   getTeacherStudentHbTests,
   getTeacherStudentTabletCourses,
   getTeacherStudentTabletDoses,
-  markTeacherTabletDoseTaken,
 } from '../../../lib/teacher-api';
 import { AUTH } from '../../../components/auth-ui';
 
@@ -60,7 +59,6 @@ export default function TeacherStudentDetail() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const [takingDoseId, setTakingDoseId] = useState(null);
 
   // Hb Test Form State
   const [newHbLevel, setNewHbLevel] = useState('');
@@ -230,23 +228,6 @@ export default function TeacherStudentDetail() {
       setCourseError(e.message || 'Failed to create tablet course.');
     } finally {
       setSubmittingCourse(false);
-    }
-  }
-
-  async function handleMarkDoseTaken(doseId) {
-    setError('');
-    setTakingDoseId(doseId);
-    try {
-      await markTeacherTabletDoseTaken(token, doseId);
-      const refreshed = await loadData(token);
-      if (!refreshed) setError('Dose was saved, but the student record could not be refreshed.');
-    } catch (e) {
-      if (await redirectIfSessionExpired(e)) return;
-      setError(e.message === 'Internal server error'
-        ? 'This tablet action could not be saved because the backend dose-recorder schema needs a product decision.'
-        : (e.message || 'Unable to mark this dose as taken.'));
-    } finally {
-      setTakingDoseId(null);
     }
   }
 
@@ -459,7 +440,7 @@ export default function TeacherStudentDetail() {
             <View style={{ flex: 1 }}>
               <Text style={styles.sectionTitle}>Tablet Supplementation Courses</Text>
               <Text style={styles.sectionSubtitle}>
-                Iron/folic acid courses prescribed and scheduled
+                Iron/folic acid courses prescribed and scheduled. Parents report doses; teachers review the status here.
               </Text>
             </View>
             <Pressable
@@ -585,19 +566,6 @@ export default function TeacherStudentDetail() {
                           >
                             <Text style={styles.doseDate}>{dose.scheduled_date}</Text>
                             <Text style={[styles.doseStatus, doseLabel(dose) === 'Overdue' && styles.doseOverdue]}>{doseLabel(dose)}</Text>
-                            {dose.status === 'scheduled' ? (
-                              <Pressable
-                                disabled={takingDoseId === dose.dose_id}
-                                style={[styles.takeDoseBtn, takingDoseId === dose.dose_id && styles.btnDisabled]}
-                                onPress={() => handleMarkDoseTaken(dose.dose_id)}
-                              >
-                                {takingDoseId === dose.dose_id ? (
-                                  <ActivityIndicator color="#fff" size="small" />
-                                ) : (
-                                  <Text style={styles.takeDoseBtnText}>Mark as taken</Text>
-                                )}
-                              </Pressable>
-                            ) : null}
                           </View>
                         ))}
                       </View>
@@ -639,6 +607,7 @@ const styles = StyleSheet.create({
   },
   navRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
     marginBottom: 12,
   },
@@ -696,6 +665,7 @@ const styles = StyleSheet.create({
   },
   quickActionRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
@@ -1010,19 +980,6 @@ const styles = StyleSheet.create({
   doseOverdue: {
     color: '#b42318',
     fontWeight: '700',
-  },
-  takeDoseBtn: {
-    marginTop: 5,
-    backgroundColor: AUTH.primary,
-    paddingVertical: 5,
-    paddingHorizontal: 8,
-    borderRadius: 5,
-    alignItems: 'center',
-  },
-  takeDoseBtnText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '600',
   },
   doseTaken: {
     backgroundColor: '#ecfdf3',

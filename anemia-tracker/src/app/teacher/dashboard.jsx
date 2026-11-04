@@ -284,6 +284,7 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     backgroundColor: AUTH.surface,
@@ -375,11 +376,13 @@ const styles = StyleSheet.create({
   },
   statsRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 12,
     marginBottom: 20,
   },
   statCard: {
     flex: 1,
+    minWidth: 88,
     backgroundColor: AUTH.surface,
     padding: 16,
     borderRadius: 10,
@@ -489,6 +492,7 @@ const styles = StyleSheet.create({
   },
   classCard: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: AUTH.surface,

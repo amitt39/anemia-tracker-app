@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { AUTH } from '../components/auth-ui';
 import { getStoredSessionDestination } from '../lib/navigation';
 
@@ -28,6 +28,7 @@ export default function RoleSelection() {
 
   return (
     <SafeAreaView style={styles.page}>
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <View style={styles.card}>
         <View style={styles.brandMark}><Text style={styles.brandMarkText}>+</Text></View>
         <Text style={styles.eyebrow}>Anemia Tracker</Text>
@@ -53,12 +54,14 @@ export default function RoleSelection() {
           </View><Text style={styles.arrow}>→</Text>
         </Pressable>
       </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: AUTH.background, justifyContent: 'center', padding: 24 },
+  page: { flex: 1, backgroundColor: AUTH.background },
+  scrollContent: { flexGrow: 1, justifyContent: 'center', padding: 24 },
   loadingText: { color: AUTH.muted, fontSize: 13, marginTop: 10, textAlign: 'center' },
   card: { width: '100%', maxWidth: 520, alignSelf: 'center' },
   brandMark: { width: 48, height: 48, borderRadius: 15, backgroundColor: AUTH.primary, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },

@@ -165,7 +165,7 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: COLORS.background },
   content: { width: '100%', maxWidth: 720, alignSelf: 'center', paddingHorizontal: 20, paddingBottom: 32, gap: 14 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10, backgroundColor: COLORS.background, padding: 20 },
-  topBar: { minHeight: 52, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  topBar: { minHeight: 52, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   back: { color: COLORS.primaryContainer, fontSize: 14, fontWeight: '700' },
   topLabel: { color: COLORS.secondary, fontSize: 10, fontWeight: '700', letterSpacing: 1 },
   hero: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: COLORS.low, borderRadius: 16, padding: 20, flexWrap: 'wrap' },
